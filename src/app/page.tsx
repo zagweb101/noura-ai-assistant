@@ -30,7 +30,7 @@ interface Message {
   isVoice?: boolean
 }
 
-type CallState = 'idle' | 'ringing' | 'active' | 'listening' | 'processing' | 'speaking' | 'ended'
+type CallState = 'idle' | 'requesting_perm' | 'perm_denied' | 'ringing' | 'active' | 'listening' | 'processing' | 'speaking' | 'ended'
 
 const quickActions = [
   { id: '1', icon: Clock, label: 'ساعات العمل', message: 'متى ساعات العمل عندكم؟' },
@@ -57,6 +57,7 @@ export default function Home() {
   const [callDuration, setCallDuration] = useState(0)
   const [isMuted, setIsMuted] = useState(false)
   const [isSpeakerOn, setIsSpeakerOn] = useState(true)
+  const [micPermission, setMicPermission] = useState<'prompt' | 'granted' | 'denied'>('prompt')
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -169,7 +170,39 @@ export default function Home() {
   }
 
   // ---- VOICE CALL FUNCTIONS ----
+  const requestMicPermission = async (): Promise<boolean> => {
+    try {
+      // Check if permission was already granted
+      if (micPermission === 'granted') return true
+
+      setCallState('requesting_perm')
+
+      // Request microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 24000,
+        }
+      })
+
+      // Permission granted - stop the stream for now, we'll request again when recording
+      stream.getTracks().forEach(t => t.stop())
+      setMicPermission('granted')
+      return true
+    } catch (error: unknown) {
+      console.error('Mic permission error:', error)
+      setMicPermission('denied')
+      setCallState('perm_denied')
+      return false
+    }
+  }
+
   const startCall = async () => {
+    // First request mic permission
+    const hasPermission = await requestMicPermission()
+    if (!hasPermission) return
+
     setCallState('ringing')
     setCallDuration(0)
 
@@ -205,6 +238,12 @@ export default function Home() {
 
   const startListening = async () => {
     try {
+      // Check permission first
+      if (micPermission === 'denied') {
+        setCallState('perm_denied')
+        return
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -213,6 +252,7 @@ export default function Home() {
         }
       })
       streamRef.current = stream
+      setMicPermission('granted')
 
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -250,7 +290,8 @@ export default function Home() {
       setCallState('listening')
     } catch (error) {
       console.error('Microphone error:', error)
-      setCallState('active')
+      setMicPermission('denied')
+      setCallState('perm_denied')
     }
   }
 
@@ -379,6 +420,8 @@ export default function Home() {
 
   const getCallStateText = () => {
     switch (callState) {
+      case 'requesting_perm': return 'يطلب إذن المايكروفون...'
+      case 'perm_denied': return 'إذن المايكروفون مرفوض'
       case 'ringing': return 'يتصل...'
       case 'active': return 'اضغط الميكروفون للتحدث'
       case 'listening': return 'يتكلم...'
@@ -482,6 +525,105 @@ export default function Home() {
           /* ---- VOICE CALL UI ---- */
           <div className="flex-1 flex flex-col items-center justify-center bg-gradient-to-b from-gray-50 to-white px-6 py-8">
             <AnimatePresence mode="wait">
+              {/* ---- MIC PERMISSION REQUEST SCREEN ---- */}
+              {callState === 'requesting_perm' && (
+                <motion.div
+                  key="requesting_perm"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex flex-col items-center text-center"
+                >
+                  <motion.div
+                    className="w-28 h-28 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center mb-6"
+                    animate={{ scale: [1, 1.05, 1] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
+                  >
+                    <Mic className="w-14 h-14 text-white" />
+                  </motion.div>
+                  <h3 className="text-lg font-bold text-gray-800 mb-2">يحتاج إذن المايكروفون</h3>
+                  <p className="text-gray-500 text-sm max-w-xs mb-4">
+                    عشان نسمعك ونتكلم معاك، لازم تعطينا إذن استخدام المايكروفون
+                  </p>
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 max-w-xs">
+                    <p className="text-blue-700 text-xs">
+                      المتصفح بيسألك الحين إذا تسمح بالمايكروفون - اضغط &quot;سماح&quot;
+                    </p>
+                  </div>
+                  <motion.div
+                    className="mt-6 flex items-center gap-2 text-gray-400 text-sm"
+                    animate={{ opacity: [0.5, 1, 0.5] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
+                  >
+                    <motion.div
+                      className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full"
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                    />
+                    ينتظر موافقتك...
+                  </motion.div>
+                </motion.div>
+              )}
+
+              {/* ---- MIC PERMISSION DENIED SCREEN ---- */}
+              {callState === 'perm_denied' && (
+                <motion.div
+                  key="perm_denied"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex flex-col items-center text-center"
+                >
+                  <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center mb-6">
+                    <MicOff className="w-10 h-10 text-red-500" />
+                  </div>
+                  <h3 className="text-lg font-bold text-gray-800 mb-2">ما قدرنا نصل للمايكروفون</h3>
+                  <p className="text-gray-500 text-sm max-w-xs mb-4">
+                    إذن المايكروفون مرفوض. بدون المايكروفون ما نقدر نسمعك.
+                  </p>
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 max-w-xs mb-6">
+                    <p className="text-amber-800 text-xs font-medium mb-2">عشان تسمح بالمايكروفون:</p>
+                    <ol className="text-amber-700 text-xs space-y-1 text-right list-decimal pr-4">
+                      <li>اضغط على أيقونة القفل أو الإعدادات بجانب الرابط</li>
+                      <li>الدور على &quot;المايكروفون&quot; واختر &quot;سماح&quot;</li>
+                      <li>أعد تحميل الصفحة وجرب مرة ثانية</li>
+                    </ol>
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={async () => {
+                        setMicPermission('prompt')
+                        setCallState('idle')
+                        // Try again
+                        setTimeout(async () => {
+                          const hasPermission = await requestMicPermission()
+                          if (hasPermission) {
+                            setCallState('ringing')
+                            setCallDuration(0)
+                            await new Promise(r => setTimeout(r, 2000))
+                            setCallState('active')
+                            callTimerRef.current = setInterval(() => {
+                              setCallDuration(prev => prev + 1)
+                            }, 1000)
+                            await playTTS('يا هلا، معاك المساعد الذكي. تفضل كيف أقدر أخدمك؟')
+                          }
+                        }, 100)
+                      }}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full text-sm font-medium transition-colors active:scale-95"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      جرب مرة ثانية
+                    </button>
+                    <button
+                      onClick={() => setCallState('idle')}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-full text-sm font-medium transition-colors active:scale-95"
+                    >
+                      رجع للمحادثة
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+
               {callState === 'ringing' && (
                 <motion.div
                   key="ringing"
