@@ -368,35 +368,43 @@ export default function Home() {
   const playTTS = async (text: string): Promise<void> => {
     return new Promise(async (resolve) => {
       try {
-        const res = await fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, voice: 'tongtong', speed: 1.0 }),
-        })
+        // Use browser's built-in SpeechSynthesis API for Arabic support
+        if ('speechSynthesis' in window) {
+          // Cancel any ongoing speech
+          window.speechSynthesis.cancel()
 
-        if (!res.ok) {
+          const utterance = new SpeechSynthesisUtterance(text)
+          utterance.lang = 'ar-SA'
+          utterance.rate = 0.95
+          utterance.pitch = 1.0
+          utterance.volume = 1.0
+
+          // Try to find an Arabic voice
+          const voices = window.speechSynthesis.getVoices()
+          const arabicVoice = voices.find(v => v.lang.startsWith('ar'))
+          if (arabicVoice) {
+            utterance.voice = arabicVoice
+          }
+
+          utterance.onend = () => resolve()
+          utterance.onerror = () => resolve()
+
+          // Some browsers need voices to be loaded first
+          if (voices.length === 0) {
+            window.speechSynthesis.onvoiceschanged = () => {
+              const newVoices = window.speechSynthesis.getVoices()
+              const arVoice = newVoices.find(v => v.lang.startsWith('ar'))
+              if (arVoice) utterance.voice = arVoice
+              window.speechSynthesis.speak(utterance)
+            }
+          } else {
+            window.speechSynthesis.speak(utterance)
+          }
+        } else {
+          // Fallback: no speech synthesis available
+          console.warn('SpeechSynthesis not supported')
           resolve()
-          return
         }
-
-        const audioBlob = await res.blob()
-        const audioUrl = URL.createObjectURL(audioBlob)
-
-        const audio = new Audio(audioUrl)
-        audioRef.current = audio
-
-        audio.onended = () => {
-          URL.revokeObjectURL(audioUrl)
-          audioRef.current = null
-          resolve()
-        }
-        audio.onerror = () => {
-          URL.revokeObjectURL(audioUrl)
-          audioRef.current = null
-          resolve()
-        }
-
-        await audio.play()
       } catch (error) {
         console.error('TTS playback error:', error)
         resolve()
@@ -938,9 +946,20 @@ export default function Home() {
                         </span>
                       )}
                     </div>
-                    <p className={`text-[10px] text-gray-400 mt-1 px-2 ${message.role === 'user' ? 'text-left' : 'text-right'}`}>
-                      {formatTime(message.timestamp)}
-                    </p>
+                    <div className={`flex items-center gap-2 mt-1 px-2 ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                      <p className="text-[10px] text-gray-400">
+                        {formatTime(message.timestamp)}
+                      </p>
+                      {message.role === 'assistant' && (
+                        <button
+                          onClick={() => playTTS(message.content)}
+                          className="text-emerald-500 hover:text-emerald-700 transition-colors active:scale-90"
+                          title="اسمع الرد"
+                        >
+                          <Volume2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </motion.div>
               ))}
