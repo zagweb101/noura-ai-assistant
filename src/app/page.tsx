@@ -69,6 +69,8 @@ export default function Home() {
   const [ttsApiKey, setTtsApiKey] = useState('')
   const [ttsApiSaved, setTtsApiSaved] = useState(false)
   const [ttsApiStatus, setTtsApiStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
+  const [ttsProvider, setTtsProvider] = useState<'auto' | 'openai' | 'google'>('auto')
+  const [ttsVoice, setTtsVoice] = useState('alloy')
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -91,10 +93,14 @@ export default function Home() {
   // Load TTS API key from localStorage
   useEffect(() => {
     const savedKey = localStorage.getItem('tts_api_key')
+    const savedProvider = localStorage.getItem('tts_provider') as 'auto' | 'openai' | 'google' | null
+    const savedVoice = localStorage.getItem('tts_voice')
     if (savedKey) {
       setTtsApiKey(savedKey)
       setTtsApiSaved(true)
     }
+    if (savedProvider) setTtsProvider(savedProvider)
+    if (savedVoice) setTtsVoice(savedVoice)
   }, [])
 
   useEffect(() => {
@@ -388,14 +394,16 @@ export default function Home() {
   const playTTS = async (text: string): Promise<void> => {
     return new Promise(async (resolve) => {
       try {
-        // Priority 1: Use Google Cloud TTS API if key is saved
+        // Priority 1: Use TTS API if key is saved
         const savedKey = localStorage.getItem('tts_api_key')
+        const savedProvider = localStorage.getItem('tts_provider') || 'auto'
+        const savedVoice = localStorage.getItem('tts_voice') || 'alloy'
         if (savedKey) {
           try {
             const res = await fetch('/api/tts', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text, speed: 1.0, api_key: savedKey }),
+              body: JSON.stringify({ text, speed: 1.0, api_key: savedKey, provider: savedProvider, voice: savedVoice }),
             })
 
             if (res.ok) {
@@ -473,15 +481,16 @@ export default function Home() {
 
     setTtsApiStatus('testing')
     try {
-      // Test the API key with a simple request
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'تجربة', speed: 1.0, api_key: ttsApiKey.trim() }),
+        body: JSON.stringify({ text: 'تجربة', speed: 1.0, api_key: ttsApiKey.trim(), provider: ttsProvider }),
       })
 
       if (res.ok) {
         localStorage.setItem('tts_api_key', ttsApiKey.trim())
+        localStorage.setItem('tts_provider', ttsProvider)
+        localStorage.setItem('tts_voice', ttsVoice)
         setTtsApiSaved(true)
         setTtsApiStatus('success')
       } else {
@@ -498,9 +507,13 @@ export default function Home() {
 
   const removeTtsApiKey = () => {
     localStorage.removeItem('tts_api_key')
+    localStorage.removeItem('tts_provider')
+    localStorage.removeItem('tts_voice')
     setTtsApiKey('')
     setTtsApiSaved(false)
     setTtsApiStatus('idle')
+    setTtsProvider('auto')
+    setTtsVoice('alloy')
   }
 
   const formatTime = (date: Date) => {
@@ -1186,24 +1199,90 @@ export default function Home() {
               </div>
 
               <div className="p-5 space-y-5">
-                {/* TTS Provider Info */}
+                {/* TTS Provider Selection */}
                 <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
                   <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2">
                     <Key className="w-4 h-4" />
-                    مفتاح Google Cloud TTS
+                    مفتاح API للتحويل الصوتي
                   </h3>
                   <p className="text-emerald-700 text-xs leading-relaxed mb-3">
-                    عشان المساعد يتكلم عربي بصوت واضح وطبيعي، تحتاج مفتاح API من Google Cloud.
-                    الأصوات العربية متوفرة بأسماء: <span className="font-mono bg-emerald-100 px-1 rounded">ar-XA-Standard-A</span> (أنثى) و <span className="font-mono bg-emerald-100 px-1 rounded">ar-XA-Standard-B</span> (ذكر)
+                    عشان المساعد يتكلم عربي بصوت واضح وطبيعي، تحتاج مفتاح API. يدعم OpenAI و Google Cloud.
                   </p>
-                  <a
-                    href="https://console.cloud.google.com/apis/library/texttospeech.googleapis.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-emerald-600 underline hover:text-emerald-800"
+                  <div className="flex gap-2 mb-3">
+                    <button
+                      onClick={() => {
+                        setTtsProvider('openai')
+                        setTtsVoice('alloy')
+                      }}
+                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all ${
+                        ttsProvider === 'openai'
+                          ? 'bg-emerald-600 text-white shadow'
+                          : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                      }`}
+                    >
+                      OpenAI (sk-...)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setTtsProvider('google')
+                        setTtsVoice('ar-XA-Standard-A')
+                      }}
+                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all ${
+                        ttsProvider === 'google'
+                          ? 'bg-emerald-600 text-white shadow'
+                          : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                      }`}
+                    >
+                      Google (AIza...)
+                    </button>
+                    <button
+                      onClick={() => setTtsProvider('auto')}
+                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all ${
+                        ttsProvider === 'auto'
+                          ? 'bg-emerald-600 text-white shadow'
+                          : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                      }`}
+                    >
+                      تلقائي
+                    </button>
+                  </div>
+                  {ttsProvider === 'auto' && (
+                    <p className="text-emerald-600 text-[10px]">يكتف تلقائياً بناءً على شكل المفتاح</p>
+                  )}
+                </div>
+
+                {/* Voice Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    الصوت
+                  </label>
+                  <select
+                    value={ttsVoice}
+                    onChange={(e) => setTtsVoice(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400"
+                    dir="rtl"
                   >
-                    تفعيل API من Google Cloud Console ←
-                  </a>
+                    {(ttsProvider === 'openai' || ttsProvider === 'auto') && (
+                      <>
+                        <option disabled value="">─ أصوات OpenAI ─</option>
+                        <option value="alloy">Alloy (متوازن)</option>
+                        <option value="echo">Echo (ذكر)</option>
+                        <option value="fable">Fable (معبر)</option>
+                        <option value="onyx">Onyx (ذكر عميق)</option>
+                        <option value="nova">Nova (أنثى)</option>
+                        <option value="shimmer">Shimmer (أنثى ناعم)</option>
+                      </>
+                    )}
+                    {(ttsProvider === 'google' || ttsProvider === 'auto') && (
+                      <>
+                        <option disabled value="">─ أصوات Google ─</option>
+                        <option value="ar-XA-Standard-A">عربي - أنثى (قياسي)</option>
+                        <option value="ar-XA-Standard-B">عربي - ذكر (قياسي)</option>
+                        <option value="ar-XA-Wavenet-A">عربي - أنثى (عالي الجودة)</option>
+                        <option value="ar-XA-Wavenet-B">عربي - ذكر (عالي الجودة)</option>
+                      </>
+                    )}
+                  </select>
                 </div>
 
                 {/* API Key Input */}
@@ -1219,7 +1298,7 @@ export default function Home() {
                         setTtsApiKey(e.target.value)
                         setTtsApiSaved(false)
                       }}
-                      placeholder="AIzaSy..."
+                      placeholder={ttsProvider === 'google' ? 'AIzaSy...' : 'sk-proj-...'}
                       className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 font-mono"
                       dir="ltr"
                     />
@@ -1260,7 +1339,7 @@ export default function Home() {
                   <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
                     <span className="text-sm text-gray-600 flex items-center gap-2">
                       <CheckCircle className="w-4 h-4 text-green-500" />
-                      مفتاح محفوظ
+                      مفتاح محفوظ ({ttsProvider === 'openai' ? 'OpenAI' : ttsProvider === 'google' ? 'Google' : 'تلقائي'})
                     </span>
                     <button
                       onClick={removeTtsApiKey}
@@ -1274,23 +1353,24 @@ export default function Home() {
                 {/* Steps Guide */}
                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
                   <h4 className="font-bold text-gray-700 text-sm mb-2">كيف تحصل على المفتاح؟</h4>
-                  <ol className="text-gray-600 text-xs space-y-2 list-decimal pr-4">
-                    <li>
-                      ادخل على{' '}
-                      <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">
-                        Google Cloud Console
-                      </a>
-                    </li>
-                    <li>أنشئ مشروع جديد أو اختر مشروع موجود</li>
-                    <li>
-                      فعّل{' '}
-                      <a href="https://console.cloud.google.com/apis/library/texttospeech.googleapis.com" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">
-                        Cloud Text-to-Speech API
-                      </a>
-                    </li>
-                    <li>روح لـ Credentials → Create Credentials → API Key</li>
-                    <li>انسخ المفتاح وحطه فوق</li>
-                  </ol>
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-medium text-gray-700 mb-1">OpenAI (سهل وسريع):</p>
+                      <ol className="text-gray-600 text-xs space-y-1 list-decimal pr-4">
+                        <li>ادخل على <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">platform.openai.com</a></li>
+                        <li>اضغط Create API Key</li>
+                        <li>انسخ المفتاح وحطه فوق</li>
+                      </ol>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-gray-700 mb-1">Google Cloud (أصوات عربية أصيلة):</p>
+                      <ol className="text-gray-600 text-xs space-y-1 list-decimal pr-4">
+                        <li>ادخل على <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">Google Cloud Console</a></li>
+                        <li>فعّل <a href="https://console.cloud.google.com/apis/library/texttospeech.googleapis.com" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">Text-to-Speech API</a></li>
+                        <li>روح لـ Credentials → Create API Key</li>
+                      </ol>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Current Mode */}
@@ -1300,7 +1380,9 @@ export default function Home() {
                     {ttsApiSaved ? (
                       <>
                         <span className="w-3 h-3 bg-green-400 rounded-full" />
-                        <span className="text-sm text-green-700">Google Cloud TTS (عربي بجودة عالية)</span>
+                        <span className="text-sm text-green-700">
+                          {ttsProvider === 'google' ? 'Google Cloud TTS' : 'OpenAI TTS'} (عربي بجودة عالية)
+                        </span>
                       </>
                     ) : (
                       <>
