@@ -9,6 +9,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'الصوت مطلوب' }, { status: 400 });
     }
 
+    if (typeof audio_base64 !== 'string' || audio_base64.length > 10_000_000) {
+      return NextResponse.json({ error: 'حجم الصوت كبير جداً' }, { status: 400 });
+    }
+
     const zai = await ZAI.create();
 
     const response = await zai.audio.asr.create({

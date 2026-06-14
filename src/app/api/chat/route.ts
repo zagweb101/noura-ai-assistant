@@ -3,7 +3,22 @@ import ZAI from 'z-ai-web-dev-sdk';
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages } = await req.json();
+    const body = await req.json();
+    const { messages } = body;
+
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return NextResponse.json({ reply: 'لا توجد رسائل للمعالجة' }, { status: 400 });
+    }
+
+    if (messages.length > 50) {
+      return NextResponse.json({ reply: 'عدد الرسائل كبير جداً. ابدأي محادثة جديدة' }, { status: 400 });
+    }
+
+    for (const m of messages) {
+      if (typeof m.content !== 'string' || m.content.length > 5000) {
+        return NextResponse.json({ reply: 'الرسالة طويلة جداً' }, { status: 400 });
+      }
+    }
 
     const zai = await ZAI.create();
 
@@ -33,13 +48,13 @@ export async function POST(req: NextRequest) {
       max_tokens: 200,
     });
 
-    const reply = completion.choices?.[0]?.message?.content || 'عذراً، صار خطأ بسيط. جرب مرة ثانية يا الغالي';
+    const reply = completion.choices?.[0]?.message?.content || 'عذراً، صار خطأ بسيط. جربي مرة ثانية يا الغالية';
 
     return NextResponse.json({ reply });
   } catch (error: unknown) {
     console.error('Chat API error:', error);
     return NextResponse.json(
-      { reply: 'معليش، صار خلل بسيط بال نظام. جرب بعد شوي وإن شاء الله يضبط معك' },
+      { reply: 'معليش، صار خلل بسيط بال نظام. جربي بعد شوي وإن شاء الله يضبط معك' },
       { status: 500 }
     );
   }

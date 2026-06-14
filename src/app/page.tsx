@@ -6,10 +6,8 @@ import {
   Send,
   Phone,
   PhoneOff,
-  MoreVertical,
   User,
   RotateCcw,
-  Sparkles,
   Headphones,
   MessageCircle,
   Clock,
@@ -120,6 +118,11 @@ export default function Home() {
         audioRef.current.pause()
         audioRef.current = null
       }
+      // Cancel any ongoing browser speech synthesis
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+        window.speechSynthesis.onvoiceschanged = null
+      }
     }
   }, [])
 
@@ -168,7 +171,7 @@ export default function Home() {
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: 'معليش يا الغالي، صار خلل بسيط. جرب مرة ثانية وإن شاء الله يضبط',
+        content: 'معليش يا الغالية، صار خلل بسيط. جربي مرة ثانية وإن شاء الله يضبط',
         timestamp: new Date(),
       }
       setMessages(prev => [...prev, errorMessage])
@@ -391,26 +394,35 @@ export default function Home() {
   }
 
   const playTTS = async (text: string): Promise<void> => {
-    return new Promise(async (resolve) => {
-      try {
-        // Priority 1: Use TTS API if key is saved
-        const savedKey = localStorage.getItem('tts_api_key')
-        const savedProvider = localStorage.getItem('tts_provider') || 'auto'
-        const savedVoice = localStorage.getItem('tts_voice') || 'nova'
-        if (savedKey) {
-          try {
-            const res = await fetch('/api/tts', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ text, speed: 1.0, api_key: savedKey, provider: savedProvider, voice: savedVoice }),
-            })
+    // Stop any currently playing audio first to prevent overlap
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+    }
 
-            if (res.ok) {
-              const audioBlob = await res.blob()
-              const audioUrl = URL.createObjectURL(audioBlob)
-              const audio = new Audio(audioUrl)
-              audioRef.current = audio
+    try {
+      // Priority 1: Use TTS API if key is saved
+      const savedKey = localStorage.getItem('tts_api_key')
+      const savedProvider = localStorage.getItem('tts_provider') || 'auto'
+      const savedVoice = localStorage.getItem('tts_voice') || 'nova'
+      if (savedKey) {
+        try {
+          const res = await fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, speed: 1.0, api_key: savedKey, provider: savedProvider, voice: savedVoice }),
+          })
 
+          if (res.ok) {
+            const audioBlob = await res.blob()
+            const audioUrl = URL.createObjectURL(audioBlob)
+            const audio = new Audio(audioUrl)
+            audioRef.current = audio
+
+            return new Promise<void>((resolve) => {
               audio.onended = () => {
                 URL.revokeObjectURL(audioUrl)
                 audioRef.current = null
@@ -422,22 +434,25 @@ export default function Home() {
                 // Fall back to browser TTS
                 browserTTS(text, resolve)
               }
-
-              await audio.play()
-              return // Success, don't fall through
-            }
-          } catch (error) {
-            console.error('API TTS failed, falling back to browser:', error)
+              audio.play().catch(() => {
+                URL.revokeObjectURL(audioUrl)
+                audioRef.current = null
+                browserTTS(text, resolve)
+              })
+            })
           }
+        } catch (error) {
+          console.error('API TTS failed, falling back to browser:', error)
         }
-
-        // Priority 2: Use browser's built-in SpeechSynthesis as fallback
-        browserTTS(text, resolve)
-      } catch (error) {
-        console.error('TTS playback error:', error)
-        resolve()
       }
-    })
+
+      // Priority 2: Use browser's built-in SpeechSynthesis as fallback
+      return new Promise<void>((resolve) => {
+        browserTTS(text, resolve)
+      })
+    } catch (error) {
+      console.error('TTS playback error:', error)
+    }
   }
 
   const browserTTS = (text: string, resolve: (value: void) => void) => {
@@ -451,7 +466,13 @@ export default function Home() {
       utterance.volume = 1.0
 
       const voices = window.speechSynthesis.getVoices()
-      const arabicVoice = voices.find(v => v.lang.startsWith('ar'))
+      // Prefer a female Arabic voice for نورة
+      const arabicFemaleVoice = voices.find(v =>
+        v.lang.startsWith('ar') &&
+        (/female|woman|أنثى|زينب|zaynab|laila|ليلى|majed/i.test(v.name) ||
+         /^[A-Z]/.test(v.name.charAt(0)) && /A$/.test(v.name))
+      )
+      const arabicVoice = arabicFemaleVoice || voices.find(v => v.lang.startsWith('ar'))
       if (arabicVoice) {
         utterance.voice = arabicVoice
       }
@@ -462,7 +483,12 @@ export default function Home() {
       if (voices.length === 0) {
         window.speechSynthesis.onvoiceschanged = () => {
           const newVoices = window.speechSynthesis.getVoices()
-          const arVoice = newVoices.find(v => v.lang.startsWith('ar'))
+          const arFemaleVoice = newVoices.find(v =>
+            v.lang.startsWith('ar') &&
+            (/female|woman|أنثى|زينب|zaynab|laila|ليلى|majed/i.test(v.name) ||
+             /^[A-Z]/.test(v.name.charAt(0)) && /A$/.test(v.name))
+          )
+          const arVoice = arFemaleVoice || newVoices.find(v => v.lang.startsWith('ar'))
           if (arVoice) utterance.voice = arVoice
           window.speechSynthesis.speak(utterance)
         }
@@ -535,8 +561,8 @@ export default function Home() {
       case 'perm_denied': return 'إذن المايكروفون مرفوض'
       case 'ringing': return 'يتصل...'
       case 'active': return 'اضغط الميكروفون للتحدث'
-      case 'listening': return 'يتكلم...'
-      case 'processing': return 'يفكر...'
+      case 'listening': return 'تتكلم...'
+      case 'processing': return 'تفكر...'
       case 'speaking': return 'نورة تتكلم...'
       case 'ended': return 'انتهت المكالمة'
       default: return ''
@@ -848,9 +874,9 @@ export default function Home() {
                   {/* State text */}
                   <p className="text-gray-700 font-medium text-lg mb-2">
                     {callState === 'active' && 'تقدر تتكلم الحين'}
-                    {callState === 'listening' && 'يسمعك...'}
-                    {callState === 'processing' && 'يجهز الرد...'}
-                    {callState === 'speaking' && 'يرد عليك...'}
+                    {callState === 'listening' && 'تسمعك...'}
+                    {callState === 'processing' && 'تجهز الرد...'}
+                    {callState === 'speaking' && 'ترد عليك...'}
                   </p>
                   <p className="text-gray-400 text-xs mb-8">
                     {callState === 'active' && 'اضغط زر الميكروفون وابدأ تتكلم'}
@@ -1078,6 +1104,7 @@ export default function Home() {
                           onClick={() => playTTS(message.content)}
                           className="text-emerald-500 hover:text-emerald-700 transition-colors active:scale-90"
                           title="اسمع الرد"
+                          aria-label="تشغيل الصوت"
                         >
                           <Volume2 className="w-3.5 h-3.5" />
                         </button>
@@ -1223,7 +1250,7 @@ export default function Home() {
                     مفتاح API للتحويل الصوتي
                   </h3>
                   <p className="text-emerald-700 text-xs leading-relaxed mb-3">
-                    عشان المساعد يتكلم عربي بصوت واضح وطبيعي، تحتاج مفتاح API. يدعم OpenAI و Google Cloud.
+                    عشان المساعدة تتكلم عربي بصوت واضح وطبيعي، تحتاج مفتاح API. يدعم OpenAI و Google Cloud.
                   </p>
                   <div className="flex gap-2 mb-3">
                     <button
@@ -1337,7 +1364,7 @@ export default function Home() {
                     className="flex items-center gap-2 text-green-600 text-sm bg-green-50 border border-green-200 rounded-lg px-3 py-2"
                   >
                     <CheckCircle className="w-4 h-4" />
-                    تم حفظ المفتاح بنجاح! المساعد الحين يتكلم عربي
+                    تم حفظ المفتاح بنجاح! المساعدة الحين تتكلم عربي
                   </motion.div>
                 )}
 

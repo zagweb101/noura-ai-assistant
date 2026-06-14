@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
           result = await googleTTS(text.trim(), apiKey, voiceName, speed);
         }
 
-        return new NextResponse(result.buffer, {
+        return new NextResponse(new Uint8Array(result.buffer), {
           status: 200,
           headers: {
             'Content-Type': result.contentType,
@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
       } catch (error) {
         console.error('TTS error:', error);
         return NextResponse.json(
-          { error: 'فشل في توليد الصوت', details: error instanceof Error ? error.message : String(error) },
+          { error: 'فشل في توليد الصوت' },
           { status: 500 }
         );
       }
