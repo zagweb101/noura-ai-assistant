@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Send,
   Phone,
+  PhoneOff,
   MoreVertical,
   Bot,
   User,
@@ -13,17 +14,23 @@ import {
   Headphones,
   MessageCircle,
   Clock,
-  Shield
+  Shield,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
 
 interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
   timestamp: Date
+  isVoice?: boolean
 }
+
+type CallState = 'idle' | 'ringing' | 'active' | 'listening' | 'processing' | 'speaking' | 'ended'
 
 const quickActions = [
   { id: '1', icon: Clock, label: 'ساعات العمل', message: 'متى ساعات العمل عندكم؟' },
@@ -33,9 +40,9 @@ const quickActions = [
 ]
 
 const welcomeMessages = [
-  'يا هلا ومرحبا فيك! 🌟',
+  'يا هلا ومرحبا فيك!',
   'أنا مساعدك الذكي، موجود أخدمك وأساعدك بأي استفسار',
-  'اسألني أو اختر من الخيارات السريعة تحت 👇',
+  'اسألني نصياً أو اضغط على المكالمة وتكلم معاي صوت',
 ]
 
 export default function Home() {
@@ -44,9 +51,20 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false)
   const [showWelcome, setShowWelcome] = useState(true)
   const [isOnline, setIsOnline] = useState(true)
+
+  // Voice call state
+  const [callState, setCallState] = useState<CallState>('idle')
+  const [callDuration, setCallDuration] = useState(0)
+  const [isMuted, setIsMuted] = useState(false)
+  const [isSpeakerOn, setIsSpeakerOn] = useState(true)
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const chatContainerRef = useRef<HTMLDivElement>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -58,7 +76,6 @@ export default function Home() {
     scrollToBottom()
   }, [messages, isLoading, scrollToBottom])
 
-  // Simulate online status
   useEffect(() => {
     const interval = setInterval(() => {
       setIsOnline(true)
@@ -66,7 +83,22 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [])
 
-  const sendMessage = async (text: string) => {
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (callTimerRef.current) clearInterval(callTimerRef.current)
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop())
+      }
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
+      }
+    }
+  }, [])
+
+  // ---- CHAT FUNCTIONS ----
+  const sendMessage = async (text: string, isVoice = false) => {
     if (!text.trim() || isLoading) return
 
     setShowWelcome(false)
@@ -76,6 +108,7 @@ export default function Home() {
       role: 'user',
       content: text.trim(),
       timestamp: new Date(),
+      isVoice,
     }
 
     setMessages(prev => [...prev, userMessage])
@@ -104,6 +137,7 @@ export default function Home() {
       }
 
       setMessages(prev => [...prev, assistantMessage])
+      return data.reply
     } catch {
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -112,6 +146,7 @@ export default function Home() {
         timestamp: new Date(),
       }
       setMessages(prev => [...prev, errorMessage])
+      return null
     } finally {
       setIsLoading(false)
     }
@@ -133,6 +168,201 @@ export default function Home() {
     setIsLoading(false)
   }
 
+  // ---- VOICE CALL FUNCTIONS ----
+  const startCall = async () => {
+    setCallState('ringing')
+    setCallDuration(0)
+
+    // Simulate ringing for 2 seconds
+    await new Promise(r => setTimeout(r, 2000))
+    setCallState('active')
+
+    // Start call timer
+    callTimerRef.current = setInterval(() => {
+      setCallDuration(prev => prev + 1)
+    }, 1000)
+
+    // Play greeting via TTS
+    await playTTS('يا هلا، معاك المساعد الذكي. تفضل كيف أقدر أخدمك؟')
+  }
+
+  const endCall = () => {
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current)
+      callTimerRef.current = null
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+    }
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
+    setCallState('ended')
+    setTimeout(() => setCallState('idle'), 1500)
+  }
+
+  const startListening = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 24000,
+        }
+      })
+      streamRef.current = stream
+
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : 'audio/webm',
+      })
+      mediaRecorderRef.current = mediaRecorder
+      audioChunksRef.current = []
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+        }
+      }
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks
+        stream.getTracks().forEach(t => t.stop())
+        streamRef.current = null
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        const reader = new FileReader()
+        reader.readAsDataURL(audioBlob)
+        reader.onloadend = async () => {
+          const base64Audio = (reader.result as string).split(',')[1]
+          if (!base64Audio) {
+            setCallState('active')
+            return
+          }
+          await processVoiceInput(base64Audio)
+        }
+      }
+
+      mediaRecorder.start()
+      setCallState('listening')
+    } catch (error) {
+      console.error('Microphone error:', error)
+      setCallState('active')
+    }
+  }
+
+  const stopListening = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop()
+    }
+    setCallState('processing')
+  }
+
+  const processVoiceInput = async (base64Audio: string) => {
+    try {
+      // 1. ASR - transcribe
+      const asrRes = await fetch('/api/asr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio_base64: base64Audio }),
+      })
+      const asrData = await asrRes.json()
+
+      if (!asrData.text || asrData.text.trim() === '') {
+        setCallState('active')
+        return
+      }
+
+      setShowWelcome(false)
+
+      // Add user voice message to chat
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: asrData.text,
+        timestamp: new Date(),
+        isVoice: true,
+      }
+      setMessages(prev => [...prev, userMessage])
+
+      // 2. Get AI response
+      setCallState('processing')
+      const chatMessages = [...messages, userMessage].map(m => ({
+        role: m.role,
+        content: m.content,
+      }))
+
+      const chatRes = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: chatMessages }),
+      })
+      const chatData = await chatRes.json()
+      const reply = chatData.reply
+
+      // Add assistant message to chat
+      const assistantMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: reply,
+        timestamp: new Date(),
+      }
+      setMessages(prev => [...prev, assistantMessage])
+
+      // 3. TTS - speak the response
+      setCallState('speaking')
+      await playTTS(reply)
+
+      // Go back to active (ready to listen again)
+      setCallState('active')
+    } catch (error) {
+      console.error('Voice processing error:', error)
+      setCallState('active')
+    }
+  }
+
+  const playTTS = async (text: string): Promise<void> => {
+    return new Promise(async (resolve) => {
+      try {
+        const res = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, voice: 'tongtong', speed: 1.0 }),
+        })
+
+        if (!res.ok) {
+          resolve()
+          return
+        }
+
+        const audioBlob = await res.blob()
+        const audioUrl = URL.createObjectURL(audioBlob)
+
+        const audio = new Audio(audioUrl)
+        audioRef.current = audio
+
+        audio.onended = () => {
+          URL.revokeObjectURL(audioUrl)
+          audioRef.current = null
+          resolve()
+        }
+        audio.onerror = () => {
+          URL.revokeObjectURL(audioUrl)
+          audioRef.current = null
+          resolve()
+        }
+
+        await audio.play()
+      } catch (error) {
+        console.error('TTS playback error:', error)
+        resolve()
+      }
+    })
+  }
+
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString('ar-SA', {
       hour: '2-digit',
@@ -140,6 +370,26 @@ export default function Home() {
       hour12: true,
     })
   }
+
+  const formatCallDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+  }
+
+  const getCallStateText = () => {
+    switch (callState) {
+      case 'ringing': return 'يتصل...'
+      case 'active': return 'اضغط الميكروفون للتحدث'
+      case 'listening': return 'يتكلم...'
+      case 'processing': return 'يفكر...'
+      case 'speaking': return 'المساعد يتكلم...'
+      case 'ended': return 'انتهت المكالمة'
+      default: return ''
+    }
+  }
+
+  const isInCall = callState !== 'idle'
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-amber-50 flex items-center justify-center p-2 sm:p-4 md:p-6" dir="rtl">
@@ -156,236 +406,491 @@ export default function Home() {
         </div>
 
         {/* Header */}
-        <div className="bg-gradient-to-l from-emerald-700 to-emerald-600 text-white px-4 py-3 sm:py-2 flex-shrink-0">
+        <div className={`text-white px-4 py-3 sm:py-2 flex-shrink-0 transition-all duration-500 ${
+          isInCall
+            ? 'bg-gradient-to-l from-gray-800 to-gray-900'
+            : 'bg-gradient-to-l from-emerald-700 to-emerald-600'
+        }`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {/* Avatar */}
               <div className="relative">
-                <div className="w-10 h-10 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center border border-white/30">
+                <div className={`w-10 h-10 backdrop-blur-sm rounded-full flex items-center justify-center border transition-colors duration-500 ${
+                  isInCall
+                    ? 'bg-white/10 border-white/20'
+                    : 'bg-white/20 border-white/30'
+                }`}>
                   <Bot className="w-5 h-5 text-white" />
                 </div>
-                <div className={`absolute -bottom-0.5 -left-0.5 w-3.5 h-3.5 rounded-full border-2 border-emerald-700 ${isOnline ? 'bg-green-400' : 'bg-gray-400'}`} />
+                <div className={`absolute -bottom-0.5 -left-0.5 w-3.5 h-3.5 rounded-full border-2 ${
+                  isInCall ? 'border-gray-900' : 'border-emerald-700'
+                } ${isOnline ? 'bg-green-400' : 'bg-gray-400'}`} />
               </div>
               <div>
-                <h1 className="font-bold text-base leading-tight">مساعدك الذكي</h1>
-                <p className="text-emerald-100 text-xs">
-                  {isOnline ? '● متصل الآن' : '○ غير متصل'}
+                <h1 className="font-bold text-base leading-tight">
+                  {isInCall ? 'مكالمة جارية' : 'مساعدك الذكي'}
+                </h1>
+                <p className={`text-xs ${isInCall ? 'text-gray-300' : 'text-emerald-100'}`}>
+                  {isInCall ? getCallStateText() : isOnline ? '● متصل الآن' : '○ غير متصل'}
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-white/80 hover:text-white hover:bg-white/10 h-9 w-9"
-                onClick={resetChat}
-                title="محادثة جديدة"
-              >
-                <RotateCcw className="w-4 h-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-white/80 hover:text-white hover:bg-white/10 h-9 w-9"
-              >
-                <Phone className="w-4 h-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-white/80 hover:text-white hover:bg-white/10 h-9 w-9"
-              >
-                <MoreVertical className="w-4 h-4" />
-              </Button>
-            </div>
+            {!isInCall && (
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-white/80 hover:text-white hover:bg-white/10 h-9 w-9"
+                  onClick={resetChat}
+                  title="محادثة جديدة"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-white/80 hover:text-white hover:bg-white/10 h-9 w-9"
+                  onClick={startCall}
+                  title="مكالمة صوتية"
+                >
+                  <Phone className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-white/80 hover:text-white hover:bg-white/10 h-9 w-9"
+                >
+                  <MoreVertical className="w-4 h-4" />
+                </Button>
+              </div>
+            )}
           </div>
+
+          {/* Call Duration Timer */}
+          {isInCall && callState !== 'ended' && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-center mt-1"
+            >
+              <span className="text-sm font-mono text-gray-300">{formatCallDuration(callDuration)}</span>
+            </motion.div>
+          )}
         </div>
 
-        {/* Chat Area */}
-        <div
-          ref={scrollRef}
-          className="flex-1 overflow-y-auto px-4 py-3 space-y-3 scroll-smooth"
-          style={{
-            scrollbarWidth: 'thin',
-            scrollbarColor: '#d1d5db transparent',
-          }}
-        >
-          {/* Welcome Section */}
-          <AnimatePresence>
-            {showWelcome && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="flex flex-col items-center py-6"
-              >
+        {/* Main Content Area */}
+        {isInCall ? (
+          /* ---- VOICE CALL UI ---- */
+          <div className="flex-1 flex flex-col items-center justify-center bg-gradient-to-b from-gray-50 to-white px-6 py-8">
+            <AnimatePresence mode="wait">
+              {callState === 'ringing' && (
                 <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: 'spring', stiffness: 200, delay: 0.2 }}
-                  className="w-20 h-20 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center shadow-lg shadow-emerald-200 mb-4"
+                  key="ringing"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex flex-col items-center"
                 >
-                  <Sparkles className="w-10 h-10 text-white" />
+                  <div className="relative">
+                    <motion.div
+                      className="w-28 h-28 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center"
+                      animate={{ scale: [1, 1.05, 1] }}
+                      transition={{ duration: 1.5, repeat: Infinity }}
+                    >
+                      <Bot className="w-14 h-14 text-white" />
+                    </motion.div>
+                    {/* Ringing rings */}
+                    <motion.div
+                      className="absolute inset-0 border-4 border-emerald-400 rounded-full"
+                      animate={{ scale: [1, 1.3], opacity: [0.5, 0] }}
+                      transition={{ duration: 1, repeat: Infinity }}
+                    />
+                    <motion.div
+                      className="absolute inset-0 border-4 border-emerald-400 rounded-full"
+                      animate={{ scale: [1, 1.3], opacity: [0.5, 0] }}
+                      transition={{ duration: 1, repeat: Infinity, delay: 0.5 }}
+                    />
+                  </div>
+                  <p className="text-gray-500 mt-6 text-sm">يتصل بالمساعد الذكي...</p>
                 </motion.div>
-                {welcomeMessages.map((msg, i) => (
-                  <motion.p
-                    key={i}
+              )}
+
+              {callState === 'ended' && (
+                <motion.div
+                  key="ended"
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex flex-col items-center"
+                >
+                  <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center mb-4">
+                    <PhoneOff className="w-10 h-10 text-red-500" />
+                  </div>
+                  <p className="text-gray-600 font-medium">انتهت المكالمة</p>
+                  <p className="text-gray-400 text-sm mt-1">المدة: {formatCallDuration(callDuration)}</p>
+                </motion.div>
+              )}
+
+              {(callState === 'active' || callState === 'listening' || callState === 'processing' || callState === 'speaking') && (
+                <motion.div
+                  key="active-call"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex flex-col items-center w-full"
+                >
+                  {/* Bot Avatar with voice animation */}
+                  <div className="relative mb-6">
+                    <div className={`w-28 h-28 rounded-full flex items-center justify-center transition-all duration-300 ${
+                      callState === 'speaking'
+                        ? 'bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-lg shadow-emerald-200'
+                        : callState === 'listening'
+                        ? 'bg-gradient-to-br from-blue-400 to-blue-600 shadow-lg shadow-blue-200'
+                        : 'bg-gradient-to-br from-emerald-500 to-emerald-700'
+                    }`}>
+                      <Bot className="w-14 h-14 text-white" />
+                    </div>
+
+                    {/* Sound waves animation when speaking */}
+                    {callState === 'speaking' && (
+                      <>
+                        <motion.div
+                          className="absolute inset-0 border-3 border-emerald-300 rounded-full"
+                          animate={{ scale: [1, 1.2], opacity: [0.6, 0] }}
+                          transition={{ duration: 0.8, repeat: Infinity }}
+                        />
+                        <motion.div
+                          className="absolute inset-0 border-3 border-emerald-300 rounded-full"
+                          animate={{ scale: [1, 1.2], opacity: [0.6, 0] }}
+                          transition={{ duration: 0.8, repeat: Infinity, delay: 0.4 }}
+                        />
+                      </>
+                    )}
+
+                    {/* Listening indicator */}
+                    {callState === 'listening' && (
+                      <>
+                        <motion.div
+                          className="absolute inset-0 border-3 border-blue-300 rounded-full"
+                          animate={{ scale: [1, 1.2], opacity: [0.6, 0] }}
+                          transition={{ duration: 0.8, repeat: Infinity }}
+                        />
+                      </>
+                    )}
+                  </div>
+
+                  {/* State text */}
+                  <p className="text-gray-700 font-medium text-lg mb-2">
+                    {callState === 'active' && 'تقدر تتكلم الحين'}
+                    {callState === 'listening' && 'يسمعك...'}
+                    {callState === 'processing' && 'يجهز الرد...'}
+                    {callState === 'speaking' && 'يرد عليك...'}
+                  </p>
+                  <p className="text-gray-400 text-xs mb-8">
+                    {callState === 'active' && 'اضغط زر الميكروفون وابدأ تتكلم'}
+                    {callState === 'listening' && 'تكلم الحين واضغط مرة ثانية لما تخلص'}
+                    {callState === 'processing' && 'ثواني ونرد عليك'}
+                    {callState === 'speaking' && 'اسمع الرد'}
+                  </p>
+
+                  {/* Live waveform visualization */}
+                  {(callState === 'listening' || callState === 'speaking') && (
+                    <div className="flex items-center justify-center gap-1 mb-8 h-12">
+                      {Array.from({ length: 20 }).map((_, i) => (
+                        <motion.div
+                          key={i}
+                          className={`w-1 rounded-full ${
+                            callState === 'speaking' ? 'bg-emerald-400' : 'bg-blue-400'
+                          }`}
+                          animate={{
+                            height: callState === 'listening' || callState === 'speaking'
+                              ? [8, Math.random() * 40 + 8, 8]
+                              : 8,
+                          }}
+                          transition={{
+                            duration: 0.4 + Math.random() * 0.3,
+                            repeat: Infinity,
+                            delay: i * 0.05,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Call Control Buttons */}
+                  <div className="flex items-center justify-center gap-6 mt-4">
+                    {/* Mute */}
+                    <button
+                      onClick={() => setIsMuted(!isMuted)}
+                      className={`w-14 h-14 rounded-full flex items-center justify-center transition-all ${
+                        isMuted
+                          ? 'bg-red-100 text-red-500'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                    </button>
+
+                    {/* Main mic button - push to talk */}
+                    {callState === 'active' ? (
+                      <motion.button
+                        whileTap={{ scale: 0.9 }}
+                        onClick={startListening}
+                        className="w-20 h-20 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center shadow-xl shadow-blue-200 active:shadow-none"
+                      >
+                        <Mic className="w-8 h-8 text-white" />
+                      </motion.button>
+                    ) : callState === 'listening' ? (
+                      <motion.button
+                        whileTap={{ scale: 0.9 }}
+                        onClick={stopListening}
+                        className="w-20 h-20 bg-gradient-to-br from-red-500 to-red-700 rounded-full flex items-center justify-center shadow-xl shadow-red-200"
+                      >
+                        <motion.div
+                          animate={{ scale: [1, 1.1, 1] }}
+                          transition={{ duration: 1, repeat: Infinity }}
+                        >
+                          <Mic className="w-8 h-8 text-white" />
+                        </motion.div>
+                      </motion.button>
+                    ) : (
+                      <div className="w-20 h-20 bg-gray-200 rounded-full flex items-center justify-center">
+                        <motion.div
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                          className="w-8 h-8 border-3 border-gray-400 border-t-transparent rounded-full"
+                        />
+                      </div>
+                    )}
+
+                    {/* Speaker */}
+                    <button
+                      onClick={() => setIsSpeakerOn(!isSpeakerOn)}
+                      className={`w-14 h-14 rounded-full flex items-center justify-center transition-all ${
+                        isSpeakerOn
+                          ? 'bg-emerald-100 text-emerald-600'
+                          : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                      }`}
+                    >
+                      {isSpeakerOn ? <Volume2 className="w-6 h-6" /> : <VolumeX className="w-6 h-6" />}
+                    </button>
+                  </div>
+
+                  {/* End Call */}
+                  <button
+                    onClick={endCall}
+                    className="mt-8 flex items-center gap-2 px-8 py-3 bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors active:scale-95"
+                  >
+                    <PhoneOff className="w-5 h-5" />
+                    <span className="font-medium">إنهاء المكالمة</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        ) : (
+          /* ---- CHAT UI ---- */
+          <>
+            <div
+              ref={scrollRef}
+              className="flex-1 overflow-y-auto px-4 py-3 space-y-3 scroll-smooth"
+              style={{
+                scrollbarWidth: 'thin',
+                scrollbarColor: '#d1d5db transparent',
+              }}
+            >
+              {/* Welcome Section */}
+              <AnimatePresence>
+                {showWelcome && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className="flex flex-col items-center py-6"
+                  >
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      transition={{ type: 'spring', stiffness: 200, delay: 0.2 }}
+                      className="w-20 h-20 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center shadow-lg shadow-emerald-200 mb-4"
+                    >
+                      <Sparkles className="w-10 h-10 text-white" />
+                    </motion.div>
+                    {welcomeMessages.map((msg, i) => (
+                      <motion.p
+                        key={i}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.4 + i * 0.2 }}
+                        className={`text-center ${i === 0 ? 'text-lg font-bold text-emerald-800' : i === 1 ? 'text-sm text-gray-600' : 'text-xs text-gray-400'}`}
+                      >
+                        {msg}
+                      </motion.p>
+                    ))}
+
+                    {/* Call CTA */}
+                    <motion.button
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 1.1 }}
+                      onClick={startCall}
+                      className="mt-4 flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full text-sm font-medium shadow-lg shadow-emerald-200 transition-all active:scale-95"
+                    >
+                      <Phone className="w-4 h-4" />
+                      تكلم معاي صوت
+                    </motion.button>
+
+                    {/* Quick Actions */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 15 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 1.3 }}
+                      className="grid grid-cols-2 gap-2 w-full mt-5"
+                    >
+                      {quickActions.map((action) => (
+                        <button
+                          key={action.id}
+                          onClick={() => handleQuickAction(action.message)}
+                          className="flex flex-col items-center gap-1.5 p-3 rounded-xl border border-emerald-100 bg-emerald-50/50 hover:bg-emerald-100 hover:border-emerald-200 transition-all duration-200 active:scale-95"
+                        >
+                          <action.icon className="w-5 h-5 text-emerald-600" />
+                          <span className="text-xs font-medium text-emerald-700">{action.label}</span>
+                        </button>
+                      ))}
+                    </motion.div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Messages */}
+              {messages.map((message) => (
+                <motion.div
+                  key={message.id}
+                  initial={{ opacity: 0, y: 15, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ duration: 0.3, ease: 'easeOut' }}
+                  className={`flex gap-2 ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
+                >
+                  <div className="flex-shrink-0 mt-1">
+                    {message.role === 'assistant' ? (
+                      <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center">
+                        <Bot className="w-4 h-4 text-white" />
+                      </div>
+                    ) : (
+                      <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-600 rounded-full flex items-center justify-center">
+                        <User className="w-4 h-4 text-white" />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={`max-w-[75%] ${message.role === 'user' ? 'items-end' : 'items-start'}`}>
+                    <div
+                      className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                        message.role === 'user'
+                          ? 'bg-emerald-600 text-white rounded-br-md'
+                          : 'bg-gray-100 text-gray-800 rounded-bl-md'
+                      }`}
+                    >
+                      <span>{message.content}</span>
+                      {message.isVoice && (
+                        <span className="inline-block mr-1 opacity-60">
+                          <Mic className="w-3 h-3 inline" />
+                        </span>
+                      )}
+                    </div>
+                    <p className={`text-[10px] text-gray-400 mt-1 px-2 ${message.role === 'user' ? 'text-left' : 'text-right'}`}>
+                      {formatTime(message.timestamp)}
+                    </p>
+                  </div>
+                </motion.div>
+              ))}
+
+              {/* Typing Indicator */}
+              <AnimatePresence>
+                {isLoading && (
+                  <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.4 + i * 0.2 }}
-                    className={`text-center ${i === 0 ? 'text-lg font-bold text-emerald-800' : i === 1 ? 'text-sm text-gray-600' : 'text-xs text-gray-400'}`}
+                    exit={{ opacity: 0, y: -5 }}
+                    className="flex gap-2"
                   >
-                    {msg}
-                  </motion.p>
-                ))}
+                    <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+                      <Bot className="w-4 h-4 text-white" />
+                    </div>
+                    <div className="bg-gray-100 rounded-2xl rounded-bl-md px-4 py-3">
+                      <div className="flex gap-1.5 items-center">
+                        <motion.div
+                          className="w-2 h-2 bg-emerald-500 rounded-full"
+                          animate={{ y: [0, -6, 0] }}
+                          transition={{ duration: 0.6, repeat: Infinity, delay: 0 }}
+                        />
+                        <motion.div
+                          className="w-2 h-2 bg-emerald-500 rounded-full"
+                          animate={{ y: [0, -6, 0] }}
+                          transition={{ duration: 0.6, repeat: Infinity, delay: 0.15 }}
+                        />
+                        <motion.div
+                          className="w-2 h-2 bg-emerald-500 rounded-full"
+                          animate={{ y: [0, -6, 0] }}
+                          transition={{ duration: 0.6, repeat: Infinity, delay: 0.3 }}
+                        />
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
-                {/* Quick Actions */}
+              {/* Quick Actions after response */}
+              {messages.length > 0 && messages[messages.length - 1].role === 'assistant' && !isLoading && (
                 <motion.div
-                  initial={{ opacity: 0, y: 15 }}
+                  initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.9 }}
-                  className="grid grid-cols-2 gap-2 w-full mt-5"
+                  className="flex flex-wrap gap-1.5 pt-2 justify-center"
                 >
                   {quickActions.map((action) => (
                     <button
                       key={action.id}
                       onClick={() => handleQuickAction(action.message)}
-                      className="flex flex-col items-center gap-1.5 p-3 rounded-xl border border-emerald-100 bg-emerald-50/50 hover:bg-emerald-100 hover:border-emerald-200 transition-all duration-200 active:scale-95"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-emerald-200 bg-emerald-50/50 text-emerald-700 text-xs hover:bg-emerald-100 transition-all duration-200 active:scale-95"
                     >
-                      <action.icon className="w-5 h-5 text-emerald-600" />
-                      <span className="text-xs font-medium text-emerald-700">{action.label}</span>
+                      <action.icon className="w-3 h-3" />
+                      {action.label}
                     </button>
                   ))}
                 </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Messages */}
-          {messages.map((message, index) => (
-            <motion.div
-              key={message.id}
-              initial={{ opacity: 0, y: 15, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
-              className={`flex gap-2 ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
-            >
-              {/* Avatar */}
-              <div className="flex-shrink-0 mt-1">
-                {message.role === 'assistant' ? (
-                  <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center">
-                    <Bot className="w-4 h-4 text-white" />
-                  </div>
-                ) : (
-                  <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-600 rounded-full flex items-center justify-center">
-                    <User className="w-4 h-4 text-white" />
-                  </div>
-                )}
-              </div>
-
-              {/* Bubble */}
-              <div className={`max-w-[75%] ${message.role === 'user' ? 'items-end' : 'items-start'}`}>
-                <div
-                  className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                    message.role === 'user'
-                      ? 'bg-emerald-600 text-white rounded-br-md'
-                      : 'bg-gray-100 text-gray-800 rounded-bl-md'
-                  }`}
-                >
-                  {message.content}
-                </div>
-                <p className={`text-[10px] text-gray-400 mt-1 px-2 ${message.role === 'user' ? 'text-left' : 'text-right'}`}>
-                  {formatTime(message.timestamp)}
-                </p>
-              </div>
-            </motion.div>
-          ))}
-
-          {/* Typing Indicator */}
-          <AnimatePresence>
-            {isLoading && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -5 }}
-                className="flex gap-2"
-              >
-                <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
-                  <Bot className="w-4 h-4 text-white" />
-                </div>
-                <div className="bg-gray-100 rounded-2xl rounded-bl-md px-4 py-3">
-                  <div className="flex gap-1.5 items-center">
-                    <motion.div
-                      className="w-2 h-2 bg-emerald-500 rounded-full"
-                      animate={{ y: [0, -6, 0] }}
-                      transition={{ duration: 0.6, repeat: Infinity, delay: 0 }}
-                    />
-                    <motion.div
-                      className="w-2 h-2 bg-emerald-500 rounded-full"
-                      animate={{ y: [0, -6, 0] }}
-                      transition={{ duration: 0.6, repeat: Infinity, delay: 0.15 }}
-                    />
-                    <motion.div
-                      className="w-2 h-2 bg-emerald-500 rounded-full"
-                      animate={{ y: [0, -6, 0] }}
-                      transition={{ duration: 0.6, repeat: Infinity, delay: 0.3 }}
-                    />
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Quick Actions in chat (show after first response) */}
-          {messages.length > 0 && messages[messages.length - 1].role === 'assistant' && !isLoading && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex flex-wrap gap-1.5 pt-2 justify-center"
-            >
-              {quickActions.map((action) => (
-                <button
-                  key={action.id}
-                  onClick={() => handleQuickAction(action.message)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-emerald-200 bg-emerald-50/50 text-emerald-700 text-xs hover:bg-emerald-100 transition-all duration-200 active:scale-95"
-                >
-                  <action.icon className="w-3 h-3" />
-                  {action.label}
-                </button>
-              ))}
-            </motion.div>
-          )}
-        </div>
-
-        {/* Input Area */}
-        <div className="border-t border-gray-100 bg-white px-3 py-2 pb-[env(safe-area-inset-bottom,8px)] flex-shrink-0">
-          <form onSubmit={handleSubmit} className="flex items-center gap-2">
-            <div className="flex-1 relative">
-              <input
-                ref={inputRef}
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="اكتب رسالتك هنا..."
-                disabled={isLoading}
-                className="w-full bg-gray-50 border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 transition-all disabled:opacity-50 placeholder:text-gray-400"
-                dir="rtl"
-              />
+              )}
             </div>
-            <Button
-              type="submit"
-              disabled={!input.trim() || isLoading}
-              className="w-10 h-10 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white flex-shrink-0 shadow-lg shadow-emerald-200 disabled:opacity-40 disabled:shadow-none transition-all active:scale-90"
-              size="icon"
-            >
-              <Send className="w-4 h-4 rotate-180" />
-            </Button>
-          </form>
-          <p className="text-center text-[10px] text-gray-300 mt-1.5">
-            مدعوم بالذكاء الاصطناعي
-          </p>
-        </div>
 
-        {/* Bottom Home Indicator (mobile feel) */}
+            {/* Input Area */}
+            <div className="border-t border-gray-100 bg-white px-3 py-2 pb-[env(safe-area-inset-bottom,8px)] flex-shrink-0">
+              <form onSubmit={handleSubmit} className="flex items-center gap-2">
+                <div className="flex-1 relative">
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="اكتب رسالتك هنا..."
+                    disabled={isLoading}
+                    className="w-full bg-gray-50 border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 transition-all disabled:opacity-50 placeholder:text-gray-400"
+                    dir="rtl"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  disabled={!input.trim() || isLoading}
+                  className="w-10 h-10 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white flex-shrink-0 shadow-lg shadow-emerald-200 disabled:opacity-40 disabled:shadow-none transition-all active:scale-90"
+                  size="icon"
+                >
+                  <Send className="w-4 h-4 rotate-180" />
+                </Button>
+              </form>
+              <p className="text-center text-[10px] text-gray-300 mt-1.5">
+                مدعوم بالذكاء الاصطناعي
+              </p>
+            </div>
+          </>
+        )}
+
+        {/* Bottom Home Indicator */}
         <div className="hidden sm:flex justify-center pb-2 bg-white">
           <div className="w-32 h-1 bg-gray-200 rounded-full" />
         </div>
