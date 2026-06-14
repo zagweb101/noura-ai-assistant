@@ -1,20 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ZAI from 'z-ai-web-dev-sdk';
 
-function getZAIConfig() {
-  const baseUrl = process.env.ZAI_BASE_URL;
-  const apiKey = process.env.ZAI_API_KEY;
-  const chatId = process.env.ZAI_CHAT_ID;
-  const token = process.env.ZAI_TOKEN;
-  const userId = process.env.ZAI_USER_ID;
-
-  if (!baseUrl || !apiKey) {
-    return null;
-  }
-
-  return { baseUrl, apiKey, chatId, userId, token };
-}
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -24,37 +10,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ reply: 'لا توجد رسائل للمعالجة' }, { status: 400 });
     }
 
-    if (messages.length > 50) {
-      return NextResponse.json({ reply: 'عدد الرسائل كبير جداً. ابدأي محادثة جديدة' }, { status: 400 });
-    }
+    // Debug: Check env vars
+    const config = {
+      baseUrl: process.env.ZAI_BASE_URL,
+      apiKey: process.env.ZAI_API_KEY,
+      chatId: process.env.ZAI_CHAT_ID,
+      userId: process.env.ZAI_USER_ID,
+      token: process.env.ZAI_TOKEN,
+    };
 
-    for (const m of messages) {
-      if (typeof m.content !== 'string' || m.content.length > 5000) {
-        return NextResponse.json({ reply: 'الرسالة طويلة جداً' }, { status: 400 });
-      }
-    }
+    console.log('Config available:', {
+      hasBaseUrl: !!config.baseUrl,
+      hasApiKey: !!config.apiKey,
+      hasChatId: !!config.chatId,
+      hasUserId: !!config.userId,
+      hasToken: !!config.token,
+    });
 
-    const config = getZAIConfig();
-    if (!config) {
-      return NextResponse.json(
-        { reply: 'النظام غير مُهيأ. تواصلي مع الدعم الفني.' },
-        { status: 500 }
-      );
+    if (!config.baseUrl || !config.apiKey) {
+      return NextResponse.json({ 
+        reply: 'النظام غير مُهيأ', 
+        debug: { hasBaseUrl: !!config.baseUrl, hasApiKey: !!config.apiKey }
+      }, { status: 500 });
     }
 
     const zai = new ZAI(config);
 
-    const systemPrompt = `أنت "نورة" - مساعدة ذكية ومحترفة تتكلم بلهجة خليجية سعودية أنثوية. قواعدك:
-- أنت بنت سعودية خليجية ذكية ومحترفة وواثقة من نفسها
-- تتكلمين بلهجة سعودية خليجية أنثوية طبيعية (استخدمي: حياك الله، والله، عاد، زين، إن شاء الله، يا هلا، تفضل/تفضلي، غنيمه، قطوة، مو مشكلة، عساك على القوة، الله يعطيك العافية، تسلم، حبيبتي يا هلا)
-- ردودك قصيرة ومفيدة ومباشرة (٣ جمل كحد أقصى غالباً) - ما تطولين بالكلام
-- محترفة وذكية وتعطي إجابات دقيقة وسريعة
-- لطيفة وودودة وتخلي العميل يحس إنه مهم
-- إذا العميل يسأل عن شيء ما عندك خبرة فيه، قولي له بصراحة ولطف ووجّهيه للقسم المناسب
-- ما تستخدمين الإنجليزي أبداً إلا لو كان اسم منتج أو علامة تجارية
-- إذا أحد شكا أو زعل، طمئنيه وحسّسيه إن مشكلته مهمة وإنكم بتحلونها
-- لا تكتبين نقاط مرقمة أو قوائم، خلي الكلام سلس وطبيعي زي المحادثة
-- دايماً اختصري وخلي ردودك مفيدة وسريعة`;
+    const systemPrompt = `أنت "نورة" - مساعدة ذكية ومحترفة تتكلم بلهجة خليجية سعودية أنثوية. ردودك قصيرة ومفيدة.`;
 
     const allMessages = [
       { role: 'system' as const, content: systemPrompt },
@@ -64,19 +46,20 @@ export async function POST(req: NextRequest) {
       })),
     ];
 
+    console.log('Sending to ZAI API...');
     const completion = await zai.chat.completions.create({
       messages: allMessages,
       temperature: 0.8,
       max_tokens: 200,
     });
+    console.log('ZAI API response:', JSON.stringify(completion).substring(0, 200));
 
-    const reply = completion.choices?.[0]?.message?.content || 'عذراً، صار خطأ بسيط. جربي مرة ثانية يا الغالية';
-
+    const reply = completion.choices?.[0]?.message?.content || 'عذراً، صار خطأ بسيط.';
     return NextResponse.json({ reply });
   } catch (error: unknown) {
     console.error('Chat API error:', error);
     return NextResponse.json(
-      { reply: 'معليش، صار خلل بسيط بال نظام. جربي بعد شوي وإن شاء الله يضبط معك' },
+      { reply: 'معليش، صار خلل بسيط. جربي بعد شوي', error: error instanceof Error ? error.message : String(error) },
       { status: 500 }
     );
   }
