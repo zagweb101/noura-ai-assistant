@@ -1,6 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ZAI from 'z-ai-web-dev-sdk';
 
+function getZAIConfig() {
+  const baseUrl = process.env.ZAI_BASE_URL;
+  const apiKey = process.env.ZAI_API_KEY;
+  const chatId = process.env.ZAI_CHAT_ID;
+  const token = process.env.ZAI_TOKEN;
+  const userId = process.env.ZAI_USER_ID;
+
+  if (!baseUrl || !apiKey) {
+    return null;
+  }
+
+  return { baseUrl, apiKey, chatId, userId, token };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -20,7 +34,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const zai = await ZAI.create();
+    const config = getZAIConfig();
+    if (!config) {
+      return NextResponse.json(
+        { reply: 'النظام غير مُهيأ. تواصلي مع الدعم الفني.' },
+        { status: 500 }
+      );
+    }
+
+    const zai = new ZAI(config);
 
     const systemPrompt = `أنت "نورة" - مساعدة ذكية ومحترفة تتكلم بلهجة خليجية سعودية أنثوية. قواعدك:
 - أنت بنت سعودية خليجية ذكية ومحترفة وواثقة من نفسها

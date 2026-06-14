@@ -13,7 +13,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'حجم الصوت كبير جداً' }, { status: 400 });
     }
 
-    const zai = await ZAI.create();
+    const zaiConfig = {
+      baseUrl: process.env.ZAI_BASE_URL!,
+      apiKey: process.env.ZAI_API_KEY!,
+      chatId: process.env.ZAI_CHAT_ID,
+      userId: process.env.ZAI_USER_ID,
+      token: process.env.ZAI_TOKEN,
+    };
+
+    if (!zaiConfig.baseUrl || !zaiConfig.apiKey) {
+      return NextResponse.json({ error: 'النظام غير مُهيأ' }, { status: 500 });
+    }
+
+    const zai = new ZAI(zaiConfig);
 
     const response = await zai.audio.asr.create({
       file_base64: audio_base64,
