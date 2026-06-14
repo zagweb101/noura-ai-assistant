@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
       input: text.trim(),
       voice: voice,
       speed: speed,
-      response_format: 'mp3',
+      response_format: 'wav',
       stream: false,
     });
 
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     return new NextResponse(buffer, {
       status: 200,
       headers: {
-        'Content-Type': 'audio/mpeg',
+        'Content-Type': 'audio/wav',
         'Content-Length': buffer.length.toString(),
         'Cache-Control': 'no-cache',
       },
