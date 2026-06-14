@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
         }
 
         if (detectedProvider === 'openai') {
-          const ttsVoice = voice || process.env.TTS_VOICE || 'alloy';
+          const ttsVoice = voice || process.env.TTS_VOICE || 'nova';
           result = await openAITTS(text.trim(), apiKey, ttsVoice, speed);
         } else {
           const voiceName = voice || process.env.TTS_VOICE || 'ar-XA-Standard-A';

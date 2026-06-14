@@ -7,7 +7,6 @@ import {
   Phone,
   PhoneOff,
   MoreVertical,
-  Bot,
   User,
   RotateCcw,
   Sparkles,
@@ -46,8 +45,8 @@ const quickActions = [
 
 const welcomeMessages = [
   'يا هلا ومرحبا فيك!',
-  'أنا مساعدك الذكي، موجود أخدمك وأساعدك بأي استفسار',
-  'اسألني نصياً أو اضغط على المكالمة وتكلم معاي صوت',
+  'أنا نورة، مساعدتك الذكية، موجودة أخدمك وأساعدك بأي استفسار',
+  'اسألني نصياً أو اضغط على المكالمة وتكلمي معاي صوت',
 ]
 
 export default function Home() {
@@ -70,7 +69,7 @@ export default function Home() {
   const [ttsApiSaved, setTtsApiSaved] = useState(false)
   const [ttsApiStatus, setTtsApiStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
   const [ttsProvider, setTtsProvider] = useState<'auto' | 'openai' | 'google'>('auto')
-  const [ttsVoice, setTtsVoice] = useState('alloy')
+  const [ttsVoice, setTtsVoice] = useState('nova')
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -242,7 +241,7 @@ export default function Home() {
     }, 1000)
 
     // Play greeting via TTS
-    await playTTS('يا هلا، معاك المساعد الذكي. تفضل كيف أقدر أخدمك؟')
+    await playTTS('يا هلا، معاك نورة. تفضلي كيف أقدر أخدمك؟')
   }
 
   const endCall = () => {
@@ -397,7 +396,7 @@ export default function Home() {
         // Priority 1: Use TTS API if key is saved
         const savedKey = localStorage.getItem('tts_api_key')
         const savedProvider = localStorage.getItem('tts_provider') || 'auto'
-        const savedVoice = localStorage.getItem('tts_voice') || 'alloy'
+        const savedVoice = localStorage.getItem('tts_voice') || 'nova'
         if (savedKey) {
           try {
             const res = await fetch('/api/tts', {
@@ -513,7 +512,7 @@ export default function Home() {
     setTtsApiSaved(false)
     setTtsApiStatus('idle')
     setTtsProvider('auto')
-    setTtsVoice('alloy')
+    setTtsVoice('nova')
   }
 
   const formatTime = (date: Date) => {
@@ -538,7 +537,7 @@ export default function Home() {
       case 'active': return 'اضغط الميكروفون للتحدث'
       case 'listening': return 'يتكلم...'
       case 'processing': return 'يفكر...'
-      case 'speaking': return 'المساعد يتكلم...'
+      case 'speaking': return 'نورة تتكلم...'
       case 'ended': return 'انتهت المكالمة'
       default: return ''
     }
@@ -574,7 +573,10 @@ export default function Home() {
                     ? 'bg-white/10 border-white/20'
                     : 'bg-white/20 border-white/30'
                 }`}>
-                  <Bot className="w-5 h-5 text-white" />
+                  <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="8" r="4" />
+                    <path d="M5.5 21c0-3.5 3-6.5 6.5-6.5s6.5 3 6.5 6.5" />
+                  </svg>
                 </div>
                 <div className={`absolute -bottom-0.5 -left-0.5 w-3.5 h-3.5 rounded-full border-2 ${
                   isInCall ? 'border-gray-900' : 'border-emerald-700'
@@ -582,7 +584,7 @@ export default function Home() {
               </div>
               <div>
                 <h1 className="font-bold text-base leading-tight">
-                  {isInCall ? 'مكالمة جارية' : 'مساعدك الذكي'}
+                  {isInCall ? 'مكالمة جارية' : 'نورة'}
                 </h1>
                 <p className={`text-xs ${isInCall ? 'text-gray-300' : 'text-emerald-100'}`}>
                   {isInCall ? getCallStateText() : isOnline ? '● متصل الآن' : '○ غير متصل'}
@@ -722,7 +724,7 @@ export default function Home() {
                             callTimerRef.current = setInterval(() => {
                               setCallDuration(prev => prev + 1)
                             }, 1000)
-                            await playTTS('يا هلا، معاك المساعد الذكي. تفضل كيف أقدر أخدمك؟')
+                            await playTTS('يا هلا، معاك نورة. تفضلي كيف أقدر أخدمك؟')
                           }
                         }, 100)
                       }}
@@ -755,7 +757,10 @@ export default function Home() {
                       animate={{ scale: [1, 1.05, 1] }}
                       transition={{ duration: 1.5, repeat: Infinity }}
                     >
-                      <Bot className="w-14 h-14 text-white" />
+                      <svg className="w-14 h-14 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="8" r="4" />
+                        <path d="M5.5 21c0-3.5 3-6.5 6.5-6.5s6.5 3 6.5 6.5" />
+                      </svg>
                     </motion.div>
                     {/* Ringing rings */}
                     <motion.div
@@ -769,7 +774,7 @@ export default function Home() {
                       transition={{ duration: 1, repeat: Infinity, delay: 0.5 }}
                     />
                   </div>
-                  <p className="text-gray-500 mt-6 text-sm">يتصل بالمساعد الذكي...</p>
+                  <p className="text-gray-500 mt-6 text-sm">يتصل بنورة...</p>
                 </motion.div>
               )}
 
@@ -806,7 +811,10 @@ export default function Home() {
                         ? 'bg-gradient-to-br from-blue-400 to-blue-600 shadow-lg shadow-blue-200'
                         : 'bg-gradient-to-br from-emerald-500 to-emerald-700'
                     }`}>
-                      <Bot className="w-14 h-14 text-white" />
+                      <svg className="w-14 h-14 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="8" r="4" />
+                        <path d="M5.5 21c0-3.5 3-6.5 6.5-6.5s6.5 3 6.5 6.5" />
+                      </svg>
                     </div>
 
                     {/* Sound waves animation when speaking */}
@@ -971,7 +979,10 @@ export default function Home() {
                       transition={{ type: 'spring', stiffness: 200, delay: 0.2 }}
                       className="w-20 h-20 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center shadow-lg shadow-emerald-200 mb-4"
                     >
-                      <Sparkles className="w-10 h-10 text-white" />
+                      <svg className="w-10 h-10 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="8" r="4" />
+                      <path d="M5.5 21c0-3.5 3-6.5 6.5-6.5s6.5 3 6.5 6.5" />
+                    </svg>
                     </motion.div>
                     {welcomeMessages.map((msg, i) => (
                       <motion.p
@@ -994,7 +1005,7 @@ export default function Home() {
                       className="mt-4 flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full text-sm font-medium shadow-lg shadow-emerald-200 transition-all active:scale-95"
                     >
                       <Phone className="w-4 h-4" />
-                      تكلم معاي صوت
+                      تكلمي معاي صوت
                     </motion.button>
 
                     {/* Quick Actions */}
@@ -1031,7 +1042,10 @@ export default function Home() {
                   <div className="flex-shrink-0 mt-1">
                     {message.role === 'assistant' ? (
                       <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center">
-                        <Bot className="w-4 h-4 text-white" />
+                        <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="8" r="4" />
+                          <path d="M5.5 21c0-3.5 3-6.5 6.5-6.5s6.5 3 6.5 6.5" />
+                        </svg>
                       </div>
                     ) : (
                       <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-600 rounded-full flex items-center justify-center">
@@ -1083,7 +1097,10 @@ export default function Home() {
                     className="flex gap-2"
                   >
                     <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
-                      <Bot className="w-4 h-4 text-white" />
+                      <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="8" r="4" />
+                        <path d="M5.5 21c0-3.5 3-6.5 6.5-6.5s6.5 3 6.5 6.5" />
+                      </svg>
                     </div>
                     <div className="bg-gray-100 rounded-2xl rounded-bl-md px-4 py-3">
                       <div className="flex gap-1.5 items-center">
@@ -1212,7 +1229,7 @@ export default function Home() {
                     <button
                       onClick={() => {
                         setTtsProvider('openai')
-                        setTtsVoice('alloy')
+                        setTtsVoice('nova')
                       }}
                       className={`flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all ${
                         ttsProvider === 'openai'

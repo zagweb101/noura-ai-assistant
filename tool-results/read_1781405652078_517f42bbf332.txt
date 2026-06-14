@@ -1,0 +1,1403 @@
+     1→'use client'
+     2→
+     3→import { useState, useRef, useEffect, useCallback } from 'react'
+     4→import { motion, AnimatePresence } from 'framer-motion'
+     5→import {
+     6→  Send,
+     7→  Phone,
+     8→  PhoneOff,
+     9→  MoreVertical,
+    10→  Bot,
+    11→  User,
+    12→  RotateCcw,
+    13→  Sparkles,
+    14→  Headphones,
+    15→  MessageCircle,
+    16→  Clock,
+    17→  Shield,
+    18→  Mic,
+    19→  MicOff,
+    20→  Volume2,
+    21→  VolumeX,
+    22→  Settings,
+    23→  X,
+    24→  Key,
+    25→  CheckCircle,
+    26→  AlertCircle,
+    27→} from 'lucide-react'
+    28→import { Button } from '@/components/ui/button'
+    29→
+    30→interface Message {
+    31→  id: string
+    32→  role: 'user' | 'assistant'
+    33→  content: string
+    34→  timestamp: Date
+    35→  isVoice?: boolean
+    36→}
+    37→
+    38→type CallState = 'idle' | 'requesting_perm' | 'perm_denied' | 'ringing' | 'active' | 'listening' | 'processing' | 'speaking' | 'ended'
+    39→
+    40→const quickActions = [
+    41→  { id: '1', icon: Clock, label: 'ساعات العمل', message: 'متى ساعات العمل عندكم؟' },
+    42→  { id: '2', icon: Headphones, label: 'الدعم الفني', message: 'محتاج مساعدة فنية' },
+    43→  { id: '3', icon: Shield, label: 'سياسة الإرجاع', message: 'وش سياسة الإرجاع عندكم؟' },
+    44→  { id: '4', icon: MessageCircle, label: 'تتبع طلب', message: 'أبي أتتبع طلبي' },
+    45→]
+    46→
+    47→const welcomeMessages = [
+    48→  'يا هلا ومرحبا فيك!',
+    49→  'أنا مساعدك الذكي، موجود أخدمك وأساعدك بأي استفسار',
+    50→  'اسألني نصياً أو اضغط على المكالمة وتكلم معاي صوت',
+    51→]
+    52→
+    53→export default function Home() {
+    54→  const [messages, setMessages] = useState<Message[]>([])
+    55→  const [input, setInput] = useState('')
+    56→  const [isLoading, setIsLoading] = useState(false)
+    57→  const [showWelcome, setShowWelcome] = useState(true)
+    58→  const [isOnline, setIsOnline] = useState(true)
+    59→
+    60→  // Voice call state
+    61→  const [callState, setCallState] = useState<CallState>('idle')
+    62→  const [callDuration, setCallDuration] = useState(0)
+    63→  const [isMuted, setIsMuted] = useState(false)
+    64→  const [isSpeakerOn, setIsSpeakerOn] = useState(true)
+    65→  const [micPermission, setMicPermission] = useState<'prompt' | 'granted' | 'denied'>('prompt')
+    66→
+    67→  // Settings state
+    68→  const [showSettings, setShowSettings] = useState(false)
+    69→  const [ttsApiKey, setTtsApiKey] = useState('')
+    70→  const [ttsApiSaved, setTtsApiSaved] = useState(false)
+    71→  const [ttsApiStatus, setTtsApiStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
+    72→  const [ttsProvider, setTtsProvider] = useState<'auto' | 'openai' | 'google'>('auto')
+    73→  const [ttsVoice, setTtsVoice] = useState('alloy')
+    74→
+    75→  const scrollRef = useRef<HTMLDivElement>(null)
+    76→  const inputRef = useRef<HTMLInputElement>(null)
+    77→  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+    78→  const audioChunksRef = useRef<Blob[]>([])
+    79→  const audioRef = useRef<HTMLAudioElement | null>(null)
+    80→  const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+    81→  const streamRef = useRef<MediaStream | null>(null)
+    82→
+    83→  const scrollToBottom = useCallback(() => {
+    84→    if (scrollRef.current) {
+    85→      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    86→    }
+    87→  }, [])
+    88→
+    89→  useEffect(() => {
+    90→    scrollToBottom()
+    91→  }, [messages, isLoading, scrollToBottom])
+    92→
+    93→  // Load TTS API key from localStorage
+    94→  useEffect(() => {
+    95→    const savedKey = localStorage.getItem('tts_api_key')
+    96→    const savedProvider = localStorage.getItem('tts_provider') as 'auto' | 'openai' | 'google' | null
+    97→    const savedVoice = localStorage.getItem('tts_voice')
+    98→    if (savedKey) {
+    99→      setTtsApiKey(savedKey)
+   100→      setTtsApiSaved(true)
+   101→    }
+   102→    if (savedProvider) setTtsProvider(savedProvider)
+   103→    if (savedVoice) setTtsVoice(savedVoice)
+   104→  }, [])
+   105→
+   106→  useEffect(() => {
+   107→    const interval = setInterval(() => {
+   108→      setIsOnline(true)
+   109→    }, 10000)
+   110→    return () => clearInterval(interval)
+   111→  }, [])
+   112→
+   113→  // Cleanup on unmount
+   114→  useEffect(() => {
+   115→    return () => {
+   116→      if (callTimerRef.current) clearInterval(callTimerRef.current)
+   117→      if (streamRef.current) {
+   118→        streamRef.current.getTracks().forEach(t => t.stop())
+   119→      }
+   120→      if (audioRef.current) {
+   121→        audioRef.current.pause()
+   122→        audioRef.current = null
+   123→      }
+   124→    }
+   125→  }, [])
+   126→
+   127→  // ---- CHAT FUNCTIONS ----
+   128→  const sendMessage = async (text: string, isVoice = false) => {
+   129→    if (!text.trim() || isLoading) return
+   130→
+   131→    setShowWelcome(false)
+   132→
+   133→    const userMessage: Message = {
+   134→      id: Date.now().toString(),
+   135→      role: 'user',
+   136→      content: text.trim(),
+   137→      timestamp: new Date(),
+   138→      isVoice,
+   139→    }
+   140→
+   141→    setMessages(prev => [...prev, userMessage])
+   142→    setInput('')
+   143→    setIsLoading(true)
+   144→
+   145→    try {
+   146→      const chatMessages = [...messages, userMessage].map(m => ({
+   147→        role: m.role,
+   148→        content: m.content,
+   149→      }))
+   150→
+   151→      const res = await fetch('/api/chat', {
+   152→        method: 'POST',
+   153→        headers: { 'Content-Type': 'application/json' },
+   154→        body: JSON.stringify({ messages: chatMessages }),
+   155→      })
+   156→
+   157→      const data = await res.json()
+   158→
+   159→      const assistantMessage: Message = {
+   160→        id: (Date.now() + 1).toString(),
+   161→        role: 'assistant',
+   162→        content: data.reply,
+   163→        timestamp: new Date(),
+   164→      }
+   165→
+   166→      setMessages(prev => [...prev, assistantMessage])
+   167→      return data.reply
+   168→    } catch {
+   169→      const errorMessage: Message = {
+   170→        id: (Date.now() + 1).toString(),
+   171→        role: 'assistant',
+   172→        content: 'معليش يا الغالي، صار خلل بسيط. جرب مرة ثانية وإن شاء الله يضبط',
+   173→        timestamp: new Date(),
+   174→      }
+   175→      setMessages(prev => [...prev, errorMessage])
+   176→      return null
+   177→    } finally {
+   178→      setIsLoading(false)
+   179→    }
+   180→  }
+   181→
+   182→  const handleSubmit = (e: React.FormEvent) => {
+   183→    e.preventDefault()
+   184→    sendMessage(input)
+   185→  }
+   186→
+   187→  const handleQuickAction = (message: string) => {
+   188→    sendMessage(message)
+   189→  }
+   190→
+   191→  const resetChat = () => {
+   192→    setMessages([])
+   193→    setShowWelcome(true)
+   194→    setInput('')
+   195→    setIsLoading(false)
+   196→  }
+   197→
+   198→  // ---- VOICE CALL FUNCTIONS ----
+   199→  const requestMicPermission = async (): Promise<boolean> => {
+   200→    try {
+   201→      // Check if permission was already granted
+   202→      if (micPermission === 'granted') return true
+   203→
+   204→      setCallState('requesting_perm')
+   205→
+   206→      // Request microphone access
+   207→      const stream = await navigator.mediaDevices.getUserMedia({
+   208→        audio: {
+   209→          echoCancellation: true,
+   210→          noiseSuppression: true,
+   211→          sampleRate: 24000,
+   212→        }
+   213→      })
+   214→
+   215→      // Permission granted - stop the stream for now, we'll request again when recording
+   216→      stream.getTracks().forEach(t => t.stop())
+   217→      setMicPermission('granted')
+   218→      return true
+   219→    } catch (error: unknown) {
+   220→      console.error('Mic permission error:', error)
+   221→      setMicPermission('denied')
+   222→      setCallState('perm_denied')
+   223→      return false
+   224→    }
+   225→  }
+   226→
+   227→  const startCall = async () => {
+   228→    // First request mic permission
+   229→    const hasPermission = await requestMicPermission()
+   230→    if (!hasPermission) return
+   231→
+   232→    setCallState('ringing')
+   233→    setCallDuration(0)
+   234→
+   235→    // Simulate ringing for 2 seconds
+   236→    await new Promise(r => setTimeout(r, 2000))
+   237→    setCallState('active')
+   238→
+   239→    // Start call timer
+   240→    callTimerRef.current = setInterval(() => {
+   241→      setCallDuration(prev => prev + 1)
+   242→    }, 1000)
+   243→
+   244→    // Play greeting via TTS
+   245→    await playTTS('يا هلا، معاك المساعد الذكي. تفضل كيف أقدر أخدمك؟')
+   246→  }
+   247→
+   248→  const endCall = () => {
+   249→    if (callTimerRef.current) {
+   250→      clearInterval(callTimerRef.current)
+   251→      callTimerRef.current = null
+   252→    }
+   253→    if (streamRef.current) {
+   254→      streamRef.current.getTracks().forEach(t => t.stop())
+   255→      streamRef.current = null
+   256→    }
+   257→    if (audioRef.current) {
+   258→      audioRef.current.pause()
+   259→      audioRef.current = null
+   260→    }
+   261→    setCallState('ended')
+   262→    setTimeout(() => setCallState('idle'), 1500)
+   263→  }
+   264→
+   265→  const startListening = async () => {
+   266→    try {
+   267→      // Check permission first
+   268→      if (micPermission === 'denied') {
+   269→        setCallState('perm_denied')
+   270→        return
+   271→      }
+   272→
+   273→      const stream = await navigator.mediaDevices.getUserMedia({
+   274→        audio: {
+   275→          echoCancellation: true,
+   276→          noiseSuppression: true,
+   277→          sampleRate: 24000,
+   278→        }
+   279→      })
+   280→      streamRef.current = stream
+   281→      setMicPermission('granted')
+   282→
+   283→      const mediaRecorder = new MediaRecorder(stream, {
+   284→        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+   285→          ? 'audio/webm;codecs=opus'
+   286→          : 'audio/webm',
+   287→      })
+   288→      mediaRecorderRef.current = mediaRecorder
+   289→      audioChunksRef.current = []
+   290→
+   291→      mediaRecorder.ondataavailable = (event) => {
+   292→        if (event.data.size > 0) {
+   293→          audioChunksRef.current.push(event.data)
+   294→        }
+   295→      }
+   296→
+   297→      mediaRecorder.onstop = async () => {
+   298→        // Stop all tracks
+   299→        stream.getTracks().forEach(t => t.stop())
+   300→        streamRef.current = null
+   301→
+   302→        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+   303→        const reader = new FileReader()
+   304→        reader.readAsDataURL(audioBlob)
+   305→        reader.onloadend = async () => {
+   306→          const base64Audio = (reader.result as string).split(',')[1]
+   307→          if (!base64Audio) {
+   308→            setCallState('active')
+   309→            return
+   310→          }
+   311→          await processVoiceInput(base64Audio)
+   312→        }
+   313→      }
+   314→
+   315→      mediaRecorder.start()
+   316→      setCallState('listening')
+   317→    } catch (error) {
+   318→      console.error('Microphone error:', error)
+   319→      setMicPermission('denied')
+   320→      setCallState('perm_denied')
+   321→    }
+   322→  }
+   323→
+   324→  const stopListening = () => {
+   325→    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+   326→      mediaRecorderRef.current.stop()
+   327→    }
+   328→    setCallState('processing')
+   329→  }
+   330→
+   331→  const processVoiceInput = async (base64Audio: string) => {
+   332→    try {
+   333→      // 1. ASR - transcribe
+   334→      const asrRes = await fetch('/api/asr', {
+   335→        method: 'POST',
+   336→        headers: { 'Content-Type': 'application/json' },
+   337→        body: JSON.stringify({ audio_base64: base64Audio }),
+   338→      })
+   339→      const asrData = await asrRes.json()
+   340→
+   341→      if (!asrData.text || asrData.text.trim() === '') {
+   342→        setCallState('active')
+   343→        return
+   344→      }
+   345→
+   346→      setShowWelcome(false)
+   347→
+   348→      // Add user voice message to chat
+   349→      const userMessage: Message = {
+   350→        id: Date.now().toString(),
+   351→        role: 'user',
+   352→        content: asrData.text,
+   353→        timestamp: new Date(),
+   354→        isVoice: true,
+   355→      }
+   356→      setMessages(prev => [...prev, userMessage])
+   357→
+   358→      // 2. Get AI response
+   359→      setCallState('processing')
+   360→      const chatMessages = [...messages, userMessage].map(m => ({
+   361→        role: m.role,
+   362→        content: m.content,
+   363→      }))
+   364→
+   365→      const chatRes = await fetch('/api/chat', {
+   366→        method: 'POST',
+   367→        headers: { 'Content-Type': 'application/json' },
+   368→        body: JSON.stringify({ messages: chatMessages }),
+   369→      })
+   370→      const chatData = await chatRes.json()
+   371→      const reply = chatData.reply
+   372→
+   373→      // Add assistant message to chat
+   374→      const assistantMessage: Message = {
+   375→        id: (Date.now() + 1).toString(),
+   376→        role: 'assistant',
+   377→        content: reply,
+   378→        timestamp: new Date(),
+   379→      }
+   380→      setMessages(prev => [...prev, assistantMessage])
+   381→
+   382→      // 3. TTS - speak the response
+   383→      setCallState('speaking')
+   384→      await playTTS(reply)
+   385→
+   386→      // Go back to active (ready to listen again)
+   387→      setCallState('active')
+   388→    } catch (error) {
+   389→      console.error('Voice processing error:', error)
+   390→      setCallState('active')
+   391→    }
+   392→  }
+   393→
+   394→  const playTTS = async (text: string): Promise<void> => {
+   395→    return new Promise(async (resolve) => {
+   396→      try {
+   397→        // Priority 1: Use TTS API if key is saved
+   398→        const savedKey = localStorage.getItem('tts_api_key')
+   399→        const savedProvider = localStorage.getItem('tts_provider') || 'auto'
+   400→        const savedVoice = localStorage.getItem('tts_voice') || 'alloy'
+   401→        if (savedKey) {
+   402→          try {
+   403→            const res = await fetch('/api/tts', {
+   404→              method: 'POST',
+   405→              headers: { 'Content-Type': 'application/json' },
+   406→              body: JSON.stringify({ text, speed: 1.0, api_key: savedKey, provider: savedProvider, voice: savedVoice }),
+   407→            })
+   408→
+   409→            if (res.ok) {
+   410→              const audioBlob = await res.blob()
+   411→              const audioUrl = URL.createObjectURL(audioBlob)
+   412→              const audio = new Audio(audioUrl)
+   413→              audioRef.current = audio
+   414→
+   415→              audio.onended = () => {
+   416→                URL.revokeObjectURL(audioUrl)
+   417→                audioRef.current = null
+   418→                resolve()
+   419→              }
+   420→              audio.onerror = () => {
+   421→                URL.revokeObjectURL(audioUrl)
+   422→                audioRef.current = null
+   423→                // Fall back to browser TTS
+   424→                browserTTS(text, resolve)
+   425→              }
+   426→
+   427→              await audio.play()
+   428→              return // Success, don't fall through
+   429→            }
+   430→          } catch (error) {
+   431→            console.error('API TTS failed, falling back to browser:', error)
+   432→          }
+   433→        }
+   434→
+   435→        // Priority 2: Use browser's built-in SpeechSynthesis as fallback
+   436→        browserTTS(text, resolve)
+   437→      } catch (error) {
+   438→        console.error('TTS playback error:', error)
+   439→        resolve()
+   440→      }
+   441→    })
+   442→  }
+   443→
+   444→  const browserTTS = (text: string, resolve: (value: void) => void) => {
+   445→    if ('speechSynthesis' in window) {
+   446→      window.speechSynthesis.cancel()
+   447→
+   448→      const utterance = new SpeechSynthesisUtterance(text)
+   449→      utterance.lang = 'ar-SA'
+   450→      utterance.rate = 0.95
+   451→      utterance.pitch = 1.0
+   452→      utterance.volume = 1.0
+   453→
+   454→      const voices = window.speechSynthesis.getVoices()
+   455→      const arabicVoice = voices.find(v => v.lang.startsWith('ar'))
+   456→      if (arabicVoice) {
+   457→        utterance.voice = arabicVoice
+   458→      }
+   459→
+   460→      utterance.onend = () => resolve()
+   461→      utterance.onerror = () => resolve()
+   462→
+   463→      if (voices.length === 0) {
+   464→        window.speechSynthesis.onvoiceschanged = () => {
+   465→          const newVoices = window.speechSynthesis.getVoices()
+   466→          const arVoice = newVoices.find(v => v.lang.startsWith('ar'))
+   467→          if (arVoice) utterance.voice = arVoice
+   468→          window.speechSynthesis.speak(utterance)
+   469→        }
+   470→      } else {
+   471→        window.speechSynthesis.speak(utterance)
+   472→      }
+   473→    } else {
+   474→      console.warn('SpeechSynthesis not supported')
+   475→      resolve()
+   476→    }
+   477→  }
+   478→
+   479→  const saveTtsApiKey = async () => {
+   480→    if (!ttsApiKey.trim()) return
+   481→
+   482→    setTtsApiStatus('testing')
+   483→    try {
+   484→      const res = await fetch('/api/tts', {
+   485→        method: 'POST',
+   486→        headers: { 'Content-Type': 'application/json' },
+   487→        body: JSON.stringify({ text: 'تجربة', speed: 1.0, api_key: ttsApiKey.trim(), provider: ttsProvider }),
+   488→      })
+   489→
+   490→      if (res.ok) {
+   491→        localStorage.setItem('tts_api_key', ttsApiKey.trim())
+   492→        localStorage.setItem('tts_provider', ttsProvider)
+   493→        localStorage.setItem('tts_voice', ttsVoice)
+   494→        setTtsApiSaved(true)
+   495→        setTtsApiStatus('success')
+   496→      } else {
+   497→        const data = await res.json().catch(() => ({}))
+   498→        console.error('TTS test failed:', data)
+   499→        setTtsApiStatus('error')
+   500→      }
+   501→    } catch {
+   502→      setTtsApiStatus('error')
+   503→    }
+   504→
+   505→    setTimeout(() => setTtsApiStatus('idle'), 3000)
+   506→  }
+   507→
+   508→  const removeTtsApiKey = () => {
+   509→    localStorage.removeItem('tts_api_key')
+   510→    localStorage.removeItem('tts_provider')
+   511→    localStorage.removeItem('tts_voice')
+   512→    setTtsApiKey('')
+   513→    setTtsApiSaved(false)
+   514→    setTtsApiStatus('idle')
+   515→    setTtsProvider('auto')
+   516→    setTtsVoice('alloy')
+   517→  }
+   518→
+   519→  const formatTime = (date: Date) => {
+   520→    return date.toLocaleTimeString('ar-SA', {
+   521→      hour: '2-digit',
+   522→      minute: '2-digit',
+   523→      hour12: true,
+   524→    })
+   525→  }
+   526→
+   527→  const formatCallDuration = (seconds: number) => {
+   528→    const mins = Math.floor(seconds / 60)
+   529→    const secs = seconds % 60
+   530→    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+   531→  }
+   532→
+   533→  const getCallStateText = () => {
+   534→    switch (callState) {
+   535→      case 'requesting_perm': return 'يطلب إذن المايكروفون...'
+   536→      case 'perm_denied': return 'إذن المايكروفون مرفوض'
+   537→      case 'ringing': return 'يتصل...'
+   538→      case 'active': return 'اضغط الميكروفون للتحدث'
+   539→      case 'listening': return 'يتكلم...'
+   540→      case 'processing': return 'يفكر...'
+   541→      case 'speaking': return 'المساعد يتكلم...'
+   542→      case 'ended': return 'انتهت المكالمة'
+   543→      default: return ''
+   544→    }
+   545→  }
+   546→
+   547→  const isInCall = callState !== 'idle'
+   548→
+   549→  return (
+   550→    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-amber-50 flex items-center justify-center p-2 sm:p-4 md:p-6" dir="rtl">
+   551→      {/* Phone Container */}
+   552→      <motion.div
+   553→        initial={{ opacity: 0, y: 20, scale: 0.95 }}
+   554→        animate={{ opacity: 1, y: 0, scale: 1 }}
+   555→        transition={{ duration: 0.5, ease: 'easeOut' }}
+   556→        className="w-full max-w-md h-[100dvh] sm:h-[85vh] sm:max-h-[800px] bg-white sm:rounded-[2rem] sm:shadow-2xl sm:border sm:border-gray-200/50 flex flex-col overflow-hidden relative"
+   557→      >
+   558→        {/* Notch / Dynamic Island */}
+   559→        <div className="hidden sm:flex justify-center pt-2 px-4">
+   560→          <div className="w-32 h-6 bg-black rounded-full" />
+   561→        </div>
+   562→
+   563→        {/* Header */}
+   564→        <div className={`text-white px-4 py-3 sm:py-2 flex-shrink-0 transition-all duration-500 ${
+   565→          isInCall
+   566→            ? 'bg-gradient-to-l from-gray-800 to-gray-900'
+   567→            : 'bg-gradient-to-l from-emerald-700 to-emerald-600'
+   568→        }`}>
+   569→          <div className="flex items-center justify-between">
+   570→            <div className="flex items-center gap-3">
+   571→              <div className="relative">
+   572→                <div className={`w-10 h-10 backdrop-blur-sm rounded-full flex items-center justify-center border transition-colors duration-500 ${
+   573→                  isInCall
+   574→                    ? 'bg-white/10 border-white/20'
+   575→                    : 'bg-white/20 border-white/30'
+   576→                }`}>
+   577→                  <Bot className="w-5 h-5 text-white" />
+   578→                </div>
+   579→                <div className={`absolute -bottom-0.5 -left-0.5 w-3.5 h-3.5 rounded-full border-2 ${
+   580→                  isInCall ? 'border-gray-900' : 'border-emerald-700'
+   581→                } ${isOnline ? 'bg-green-400' : 'bg-gray-400'}`} />
+   582→              </div>
+   583→              <div>
+   584→                <h1 className="font-bold text-base leading-tight">
+   585→                  {isInCall ? 'مكالمة جارية' : 'مساعدك الذكي'}
+   586→                </h1>
+   587→                <p className={`text-xs ${isInCall ? 'text-gray-300' : 'text-emerald-100'}`}>
+   588→                  {isInCall ? getCallStateText() : isOnline ? '● متصل الآن' : '○ غير متصل'}
+   589→                </p>
+   590→              </div>
+   591→            </div>
+   592→            {!isInCall && (
+   593→              <div className="flex items-center gap-1">
+   594→                <Button
+   595→                  variant="ghost"
+   596→                  size="icon"
+   597→                  className="text-white/80 hover:text-white hover:bg-white/10 h-9 w-9"
+   598→                  onClick={resetChat}
+   599→                  title="محادثة جديدة"
+   600→                >
+   601→                  <RotateCcw className="w-4 h-4" />
+   602→                </Button>
+   603→                <Button
+   604→                  variant="ghost"
+   605→                  size="icon"
+   606→                  className="text-white/80 hover:text-white hover:bg-white/10 h-9 w-9"
+   607→                  onClick={startCall}
+   608→                  title="مكالمة صوتية"
+   609→                >
+   610→                  <Phone className="w-4 h-4" />
+   611→                </Button>
+   612→                <Button
+   613→                  variant="ghost"
+   614→                  size="icon"
+   615→                  className={`text-white/80 hover:text-white hover:bg-white/10 h-9 w-9 relative ${ttsApiSaved ? '' : ''}`}
+   616→                  onClick={() => setShowSettings(true)}
+   617→                  title="إعدادات الصوت"
+   618→                >
+   619→                  <Settings className="w-4 h-4" />
+   620→                  {ttsApiSaved && (
+   621→                    <span className="absolute -top-0.5 -left-0.5 w-2 h-2 bg-green-400 rounded-full" />
+   622→                  )}
+   623→                </Button>
+   624→              </div>
+   625→            )}
+   626→          </div>
+   627→
+   628→          {/* Call Duration Timer */}
+   629→          {isInCall && callState !== 'ended' && (
+   630→            <motion.div
+   631→              initial={{ opacity: 0 }}
+   632→              animate={{ opacity: 1 }}
+   633→              className="text-center mt-1"
+   634→            >
+   635→              <span className="text-sm font-mono text-gray-300">{formatCallDuration(callDuration)}</span>
+   636→            </motion.div>
+   637→          )}
+   638→        </div>
+   639→
+   640→        {/* Main Content Area */}
+   641→        {isInCall ? (
+   642→          /* ---- VOICE CALL UI ---- */
+   643→          <div className="flex-1 flex flex-col items-center justify-center bg-gradient-to-b from-gray-50 to-white px-6 py-8">
+   644→            <AnimatePresence mode="wait">
+   645→              {/* ---- MIC PERMISSION REQUEST SCREEN ---- */}
+   646→              {callState === 'requesting_perm' && (
+   647→                <motion.div
+   648→                  key="requesting_perm"
+   649→                  initial={{ opacity: 0 }}
+   650→                  animate={{ opacity: 1 }}
+   651→                  exit={{ opacity: 0 }}
+   652→                  className="flex flex-col items-center text-center"
+   653→                >
+   654→                  <motion.div
+   655→                    className="w-28 h-28 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center mb-6"
+   656→                    animate={{ scale: [1, 1.05, 1] }}
+   657→                    transition={{ duration: 1.5, repeat: Infinity }}
+   658→                  >
+   659→                    <Mic className="w-14 h-14 text-white" />
+   660→                  </motion.div>
+   661→                  <h3 className="text-lg font-bold text-gray-800 mb-2">يحتاج إذن المايكروفون</h3>
+   662→                  <p className="text-gray-500 text-sm max-w-xs mb-4">
+   663→                    عشان نسمعك ونتكلم معاك، لازم تعطينا إذن استخدام المايكروفون
+   664→                  </p>
+   665→                  <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 max-w-xs">
+   666→                    <p className="text-blue-700 text-xs">
+   667→                      المتصفح بيسألك الحين إذا تسمح بالمايكروفون - اضغط &quot;سماح&quot;
+   668→                    </p>
+   669→                  </div>
+   670→                  <motion.div
+   671→                    className="mt-6 flex items-center gap-2 text-gray-400 text-sm"
+   672→                    animate={{ opacity: [0.5, 1, 0.5] }}
+   673→                    transition={{ duration: 1.5, repeat: Infinity }}
+   674→                  >
+   675→                    <motion.div
+   676→                      className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full"
+   677→                      animate={{ rotate: 360 }}
+   678→                      transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+   679→                    />
+   680→                    ينتظر موافقتك...
+   681→                  </motion.div>
+   682→                </motion.div>
+   683→              )}
+   684→
+   685→              {/* ---- MIC PERMISSION DENIED SCREEN ---- */}
+   686→              {callState === 'perm_denied' && (
+   687→                <motion.div
+   688→                  key="perm_denied"
+   689→                  initial={{ opacity: 0 }}
+   690→                  animate={{ opacity: 1 }}
+   691→                  exit={{ opacity: 0 }}
+   692→                  className="flex flex-col items-center text-center"
+   693→                >
+   694→                  <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center mb-6">
+   695→                    <MicOff className="w-10 h-10 text-red-500" />
+   696→                  </div>
+   697→                  <h3 className="text-lg font-bold text-gray-800 mb-2">ما قدرنا نصل للمايكروفون</h3>
+   698→                  <p className="text-gray-500 text-sm max-w-xs mb-4">
+   699→                    إذن المايكروفون مرفوض. بدون المايكروفون ما نقدر نسمعك.
+   700→                  </p>
+   701→                  <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 max-w-xs mb-6">
+   702→                    <p className="text-amber-800 text-xs font-medium mb-2">عشان تسمح بالمايكروفون:</p>
+   703→                    <ol className="text-amber-700 text-xs space-y-1 text-right list-decimal pr-4">
+   704→                      <li>اضغط على أيقونة القفل أو الإعدادات بجانب الرابط</li>
+   705→                      <li>الدور على &quot;المايكروفون&quot; واختر &quot;سماح&quot;</li>
+   706→                      <li>أعد تحميل الصفحة وجرب مرة ثانية</li>
+   707→                    </ol>
+   708→                  </div>
+   709→                  <div className="flex gap-3">
+   710→                    <button
+   711→                      onClick={async () => {
+   712→                        setMicPermission('prompt')
+   713→                        setCallState('idle')
+   714→                        // Try again
+   715→                        setTimeout(async () => {
+   716→                          const hasPermission = await requestMicPermission()
+   717→                          if (hasPermission) {
+   718→                            setCallState('ringing')
+   719→                            setCallDuration(0)
+   720→                            await new Promise(r => setTimeout(r, 2000))
+   721→                            setCallState('active')
+   722→                            callTimerRef.current = setInterval(() => {
+   723→                              setCallDuration(prev => prev + 1)
+   724→                            }, 1000)
+   725→                            await playTTS('يا هلا، معاك المساعد الذكي. تفضل كيف أقدر أخدمك؟')
+   726→                          }
+   727→                        }, 100)
+   728→                      }}
+   729→                      className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full text-sm font-medium transition-colors active:scale-95"
+   730→                    >
+   731→                      <RotateCcw className="w-4 h-4" />
+   732→                      جرب مرة ثانية
+   733→                    </button>
+   734→                    <button
+   735→                      onClick={() => setCallState('idle')}
+   736→                      className="flex items-center gap-2 px-5 py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-full text-sm font-medium transition-colors active:scale-95"
+   737→                    >
+   738→                      رجع للمحادثة
+   739→                    </button>
+   740→                  </div>
+   741→                </motion.div>
+   742→              )}
+   743→
+   744→              {callState === 'ringing' && (
+   745→                <motion.div
+   746→                  key="ringing"
+   747→                  initial={{ opacity: 0 }}
+   748→                  animate={{ opacity: 1 }}
+   749→                  exit={{ opacity: 0 }}
+   750→                  className="flex flex-col items-center"
+   751→                >
+   752→                  <div className="relative">
+   753→                    <motion.div
+   754→                      className="w-28 h-28 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center"
+   755→                      animate={{ scale: [1, 1.05, 1] }}
+   756→                      transition={{ duration: 1.5, repeat: Infinity }}
+   757→                    >
+   758→                      <Bot className="w-14 h-14 text-white" />
+   759→                    </motion.div>
+   760→                    {/* Ringing rings */}
+   761→                    <motion.div
+   762→                      className="absolute inset-0 border-4 border-emerald-400 rounded-full"
+   763→                      animate={{ scale: [1, 1.3], opacity: [0.5, 0] }}
+   764→                      transition={{ duration: 1, repeat: Infinity }}
+   765→                    />
+   766→                    <motion.div
+   767→                      className="absolute inset-0 border-4 border-emerald-400 rounded-full"
+   768→                      animate={{ scale: [1, 1.3], opacity: [0.5, 0] }}
+   769→                      transition={{ duration: 1, repeat: Infinity, delay: 0.5 }}
+   770→                    />
+   771→                  </div>
+   772→                  <p className="text-gray-500 mt-6 text-sm">يتصل بالمساعد الذكي...</p>
+   773→                </motion.div>
+   774→              )}
+   775→
+   776→              {callState === 'ended' && (
+   777→                <motion.div
+   778→                  key="ended"
+   779→                  initial={{ opacity: 0, scale: 0.9 }}
+   780→                  animate={{ opacity: 1, scale: 1 }}
+   781→                  exit={{ opacity: 0 }}
+   782→                  className="flex flex-col items-center"
+   783→                >
+   784→                  <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center mb-4">
+   785→                    <PhoneOff className="w-10 h-10 text-red-500" />
+   786→                  </div>
+   787→                  <p className="text-gray-600 font-medium">انتهت المكالمة</p>
+   788→                  <p className="text-gray-400 text-sm mt-1">المدة: {formatCallDuration(callDuration)}</p>
+   789→                </motion.div>
+   790→              )}
+   791→
+   792→              {(callState === 'active' || callState === 'listening' || callState === 'processing' || callState === 'speaking') && (
+   793→                <motion.div
+   794→                  key="active-call"
+   795→                  initial={{ opacity: 0 }}
+   796→                  animate={{ opacity: 1 }}
+   797→                  exit={{ opacity: 0 }}
+   798→                  className="flex flex-col items-center w-full"
+   799→                >
+   800→                  {/* Bot Avatar with voice animation */}
+   801→                  <div className="relative mb-6">
+   802→                    <div className={`w-28 h-28 rounded-full flex items-center justify-center transition-all duration-300 ${
+   803→                      callState === 'speaking'
+   804→                        ? 'bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-lg shadow-emerald-200'
+   805→                        : callState === 'listening'
+   806→                        ? 'bg-gradient-to-br from-blue-400 to-blue-600 shadow-lg shadow-blue-200'
+   807→                        : 'bg-gradient-to-br from-emerald-500 to-emerald-700'
+   808→                    }`}>
+   809→                      <Bot className="w-14 h-14 text-white" />
+   810→                    </div>
+   811→
+   812→                    {/* Sound waves animation when speaking */}
+   813→                    {callState === 'speaking' && (
+   814→                      <>
+   815→                        <motion.div
+   816→                          className="absolute inset-0 border-3 border-emerald-300 rounded-full"
+   817→                          animate={{ scale: [1, 1.2], opacity: [0.6, 0] }}
+   818→                          transition={{ duration: 0.8, repeat: Infinity }}
+   819→                        />
+   820→                        <motion.div
+   821→                          className="absolute inset-0 border-3 border-emerald-300 rounded-full"
+   822→                          animate={{ scale: [1, 1.2], opacity: [0.6, 0] }}
+   823→                          transition={{ duration: 0.8, repeat: Infinity, delay: 0.4 }}
+   824→                        />
+   825→                      </>
+   826→                    )}
+   827→
+   828→                    {/* Listening indicator */}
+   829→                    {callState === 'listening' && (
+   830→                      <>
+   831→                        <motion.div
+   832→                          className="absolute inset-0 border-3 border-blue-300 rounded-full"
+   833→                          animate={{ scale: [1, 1.2], opacity: [0.6, 0] }}
+   834→                          transition={{ duration: 0.8, repeat: Infinity }}
+   835→                        />
+   836→                      </>
+   837→                    )}
+   838→                  </div>
+   839→
+   840→                  {/* State text */}
+   841→                  <p className="text-gray-700 font-medium text-lg mb-2">
+   842→                    {callState === 'active' && 'تقدر تتكلم الحين'}
+   843→                    {callState === 'listening' && 'يسمعك...'}
+   844→                    {callState === 'processing' && 'يجهز الرد...'}
+   845→                    {callState === 'speaking' && 'يرد عليك...'}
+   846→                  </p>
+   847→                  <p className="text-gray-400 text-xs mb-8">
+   848→                    {callState === 'active' && 'اضغط زر الميكروفون وابدأ تتكلم'}
+   849→                    {callState === 'listening' && 'تكلم الحين واضغط مرة ثانية لما تخلص'}
+   850→                    {callState === 'processing' && 'ثواني ونرد عليك'}
+   851→                    {callState === 'speaking' && 'اسمع الرد'}
+   852→                  </p>
+   853→
+   854→                  {/* Live waveform visualization */}
+   855→                  {(callState === 'listening' || callState === 'speaking') && (
+   856→                    <div className="flex items-center justify-center gap-1 mb-8 h-12">
+   857→                      {Array.from({ length: 20 }).map((_, i) => (
+   858→                        <motion.div
+   859→                          key={i}
+   860→                          className={`w-1 rounded-full ${
+   861→                            callState === 'speaking' ? 'bg-emerald-400' : 'bg-blue-400'
+   862→                          }`}
+   863→                          animate={{
+   864→                            height: callState === 'listening' || callState === 'speaking'
+   865→                              ? [8, Math.random() * 40 + 8, 8]
+   866→                              : 8,
+   867→                          }}
+   868→                          transition={{
+   869→                            duration: 0.4 + Math.random() * 0.3,
+   870→                            repeat: Infinity,
+   871→                            delay: i * 0.05,
+   872→                          }}
+   873→                        />
+   874→                      ))}
+   875→                    </div>
+   876→                  )}
+   877→
+   878→                  {/* Call Control Buttons */}
+   879→                  <div className="flex items-center justify-center gap-6 mt-4">
+   880→                    {/* Mute */}
+   881→                    <button
+   882→                      onClick={() => setIsMuted(!isMuted)}
+   883→                      className={`w-14 h-14 rounded-full flex items-center justify-center transition-all ${
+   884→                        isMuted
+   885→                          ? 'bg-red-100 text-red-500'
+   886→                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+   887→                      }`}
+   888→                    >
+   889→                      {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+   890→                    </button>
+   891→
+   892→                    {/* Main mic button - push to talk */}
+   893→                    {callState === 'active' ? (
+   894→                      <motion.button
+   895→                        whileTap={{ scale: 0.9 }}
+   896→                        onClick={startListening}
+   897→                        className="w-20 h-20 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center shadow-xl shadow-blue-200 active:shadow-none"
+   898→                      >
+   899→                        <Mic className="w-8 h-8 text-white" />
+   900→                      </motion.button>
+   901→                    ) : callState === 'listening' ? (
+   902→                      <motion.button
+   903→                        whileTap={{ scale: 0.9 }}
+   904→                        onClick={stopListening}
+   905→                        className="w-20 h-20 bg-gradient-to-br from-red-500 to-red-700 rounded-full flex items-center justify-center shadow-xl shadow-red-200"
+   906→                      >
+   907→                        <motion.div
+   908→                          animate={{ scale: [1, 1.1, 1] }}
+   909→                          transition={{ duration: 1, repeat: Infinity }}
+   910→                        >
+   911→                          <Mic className="w-8 h-8 text-white" />
+   912→                        </motion.div>
+   913→                      </motion.button>
+   914→                    ) : (
+   915→                      <div className="w-20 h-20 bg-gray-200 rounded-full flex items-center justify-center">
+   916→                        <motion.div
+   917→                          animate={{ rotate: 360 }}
+   918→                          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+   919→                          className="w-8 h-8 border-3 border-gray-400 border-t-transparent rounded-full"
+   920→                        />
+   921→                      </div>
+   922→                    )}
+   923→
+   924→                    {/* Speaker */}
+   925→                    <button
+   926→                      onClick={() => setIsSpeakerOn(!isSpeakerOn)}
+   927→                      className={`w-14 h-14 rounded-full flex items-center justify-center transition-all ${
+   928→                        isSpeakerOn
+   929→                          ? 'bg-emerald-100 text-emerald-600'
+   930→                          : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+   931→                      }`}
+   932→                    >
+   933→                      {isSpeakerOn ? <Volume2 className="w-6 h-6" /> : <VolumeX className="w-6 h-6" />}
+   934→                    </button>
+   935→                  </div>
+   936→
+   937→                  {/* End Call */}
+   938→                  <button
+   939→                    onClick={endCall}
+   940→                    className="mt-8 flex items-center gap-2 px-8 py-3 bg-red-500 hover:bg-red-600 text-white rounded-full transition-colors active:scale-95"
+   941→                  >
+   942→                    <PhoneOff className="w-5 h-5" />
+   943→                    <span className="font-medium">إنهاء المكالمة</span>
+   944→                  </button>
+   945→                </motion.div>
+   946→              )}
+   947→            </AnimatePresence>
+   948→          </div>
+   949→        ) : (
+   950→          /* ---- CHAT UI ---- */
+   951→          <>
+   952→            <div
+   953→              ref={scrollRef}
+   954→              className="flex-1 overflow-y-auto px-4 py-3 space-y-3 scroll-smooth"
+   955→              style={{
+   956→                scrollbarWidth: 'thin',
+   957→                scrollbarColor: '#d1d5db transparent',
+   958→              }}
+   959→            >
+   960→              {/* Welcome Section */}
+   961→              <AnimatePresence>
+   962→                {showWelcome && (
+   963→                  <motion.div
+   964→                    initial={{ opacity: 0 }}
+   965→                    exit={{ opacity: 0, scale: 0.95 }}
+   966→                    className="flex flex-col items-center py-6"
+   967→                  >
+   968→                    <motion.div
+   969→                      initial={{ scale: 0 }}
+   970→                      animate={{ scale: 1 }}
+   971→                      transition={{ type: 'spring', stiffness: 200, delay: 0.2 }}
+   972→                      className="w-20 h-20 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center shadow-lg shadow-emerald-200 mb-4"
+   973→                    >
+   974→                      <Sparkles className="w-10 h-10 text-white" />
+   975→                    </motion.div>
+   976→                    {welcomeMessages.map((msg, i) => (
+   977→                      <motion.p
+   978→                        key={i}
+   979→                        initial={{ opacity: 0, y: 10 }}
+   980→                        animate={{ opacity: 1, y: 0 }}
+   981→                        transition={{ delay: 0.4 + i * 0.2 }}
+   982→                        className={`text-center ${i === 0 ? 'text-lg font-bold text-emerald-800' : i === 1 ? 'text-sm text-gray-600' : 'text-xs text-gray-400'}`}
+   983→                      >
+   984→                        {msg}
+   985→                      </motion.p>
+   986→                    ))}
+   987→
+   988→                    {/* Call CTA */}
+   989→                    <motion.button
+   990→                      initial={{ opacity: 0, y: 10 }}
+   991→                      animate={{ opacity: 1, y: 0 }}
+   992→                      transition={{ delay: 1.1 }}
+   993→                      onClick={startCall}
+   994→                      className="mt-4 flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full text-sm font-medium shadow-lg shadow-emerald-200 transition-all active:scale-95"
+   995→                    >
+   996→                      <Phone className="w-4 h-4" />
+   997→                      تكلم معاي صوت
+   998→                    </motion.button>
+   999→
+  1000→                    {/* Quick Actions */}
+  1001→                    <motion.div
+  1002→                      initial={{ opacity: 0, y: 15 }}
+  1003→                      animate={{ opacity: 1, y: 0 }}
+  1004→                      transition={{ delay: 1.3 }}
+  1005→                      className="grid grid-cols-2 gap-2 w-full mt-5"
+  1006→                    >
+  1007→                      {quickActions.map((action) => (
+  1008→                        <button
+  1009→                          key={action.id}
+  1010→                          onClick={() => handleQuickAction(action.message)}
+  1011→                          className="flex flex-col items-center gap-1.5 p-3 rounded-xl border border-emerald-100 bg-emerald-50/50 hover:bg-emerald-100 hover:border-emerald-200 transition-all duration-200 active:scale-95"
+  1012→                        >
+  1013→                          <action.icon className="w-5 h-5 text-emerald-600" />
+  1014→                          <span className="text-xs font-medium text-emerald-700">{action.label}</span>
+  1015→                        </button>
+  1016→                      ))}
+  1017→                    </motion.div>
+  1018→                  </motion.div>
+  1019→                )}
+  1020→              </AnimatePresence>
+  1021→
+  1022→              {/* Messages */}
+  1023→              {messages.map((message) => (
+  1024→                <motion.div
+  1025→                  key={message.id}
+  1026→                  initial={{ opacity: 0, y: 15, scale: 0.95 }}
+  1027→                  animate={{ opacity: 1, y: 0, scale: 1 }}
+  1028→                  transition={{ duration: 0.3, ease: 'easeOut' }}
+  1029→                  className={`flex gap-2 ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
+  1030→                >
+  1031→                  <div className="flex-shrink-0 mt-1">
+  1032→                    {message.role === 'assistant' ? (
+  1033→                      <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center">
+  1034→                        <Bot className="w-4 h-4 text-white" />
+  1035→                      </div>
+  1036→                    ) : (
+  1037→                      <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-600 rounded-full flex items-center justify-center">
+  1038→                        <User className="w-4 h-4 text-white" />
+  1039→                      </div>
+  1040→                    )}
+  1041→                  </div>
+  1042→
+  1043→                  <div className={`max-w-[75%] ${message.role === 'user' ? 'items-end' : 'items-start'}`}>
+  1044→                    <div
+  1045→                      className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+  1046→                        message.role === 'user'
+  1047→                          ? 'bg-emerald-600 text-white rounded-br-md'
+  1048→                          : 'bg-gray-100 text-gray-800 rounded-bl-md'
+  1049→                      }`}
+  1050→                    >
+  1051→                      <span>{message.content}</span>
+  1052→                      {message.isVoice && (
+  1053→                        <span className="inline-block mr-1 opacity-60">
+  1054→                          <Mic className="w-3 h-3 inline" />
+  1055→                        </span>
+  1056→                      )}
+  1057→                    </div>
+  1058→                    <div className={`flex items-center gap-2 mt-1 px-2 ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+  1059→                      <p className="text-[10px] text-gray-400">
+  1060→                        {formatTime(message.timestamp)}
+  1061→                      </p>
+  1062→                      {message.role === 'assistant' && (
+  1063→                        <button
+  1064→                          onClick={() => playTTS(message.content)}
+  1065→                          className="text-emerald-500 hover:text-emerald-700 transition-colors active:scale-90"
+  1066→                          title="اسمع الرد"
+  1067→                        >
+  1068→                          <Volume2 className="w-3.5 h-3.5" />
+  1069→                        </button>
+  1070→                      )}
+  1071→                    </div>
+  1072→                  </div>
+  1073→                </motion.div>
+  1074→              ))}
+  1075→
+  1076→              {/* Typing Indicator */}
+  1077→              <AnimatePresence>
+  1078→                {isLoading && (
+  1079→                  <motion.div
+  1080→                    initial={{ opacity: 0, y: 10 }}
+  1081→                    animate={{ opacity: 1, y: 0 }}
+  1082→                    exit={{ opacity: 0, y: -5 }}
+  1083→                    className="flex gap-2"
+  1084→                  >
+  1085→                    <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+  1086→                      <Bot className="w-4 h-4 text-white" />
+  1087→                    </div>
+  1088→                    <div className="bg-gray-100 rounded-2xl rounded-bl-md px-4 py-3">
+  1089→                      <div className="flex gap-1.5 items-center">
+  1090→                        <motion.div
+  1091→                          className="w-2 h-2 bg-emerald-500 rounded-full"
+  1092→                          animate={{ y: [0, -6, 0] }}
+  1093→                          transition={{ duration: 0.6, repeat: Infinity, delay: 0 }}
+  1094→                        />
+  1095→                        <motion.div
+  1096→                          className="w-2 h-2 bg-emerald-500 rounded-full"
+  1097→                          animate={{ y: [0, -6, 0] }}
+  1098→                          transition={{ duration: 0.6, repeat: Infinity, delay: 0.15 }}
+  1099→                        />
+  1100→                        <motion.div
+  1101→                          className="w-2 h-2 bg-emerald-500 rounded-full"
+  1102→                          animate={{ y: [0, -6, 0] }}
+  1103→                          transition={{ duration: 0.6, repeat: Infinity, delay: 0.3 }}
+  1104→                        />
+  1105→                      </div>
+  1106→                    </div>
+  1107→                  </motion.div>
+  1108→                )}
+  1109→              </AnimatePresence>
+  1110→
+  1111→              {/* Quick Actions after response */}
+  1112→              {messages.length > 0 && messages[messages.length - 1].role === 'assistant' && !isLoading && (
+  1113→                <motion.div
+  1114→                  initial={{ opacity: 0, y: 10 }}
+  1115→                  animate={{ opacity: 1, y: 0 }}
+  1116→                  className="flex flex-wrap gap-1.5 pt-2 justify-center"
+  1117→                >
+  1118→                  {quickActions.map((action) => (
+  1119→                    <button
+  1120→                      key={action.id}
+  1121→                      onClick={() => handleQuickAction(action.message)}
+  1122→                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-emerald-200 bg-emerald-50/50 text-emerald-700 text-xs hover:bg-emerald-100 transition-all duration-200 active:scale-95"
+  1123→                    >
+  1124→                      <action.icon className="w-3 h-3" />
+  1125→                      {action.label}
+  1126→                    </button>
+  1127→                  ))}
+  1128→                </motion.div>
+  1129→              )}
+  1130→            </div>
+  1131→
+  1132→            {/* Input Area */}
+  1133→            <div className="border-t border-gray-100 bg-white px-3 py-2 pb-[env(safe-area-inset-bottom,8px)] flex-shrink-0">
+  1134→              <form onSubmit={handleSubmit} className="flex items-center gap-2">
+  1135→                <div className="flex-1 relative">
+  1136→                  <input
+  1137→                    ref={inputRef}
+  1138→                    type="text"
+  1139→                    value={input}
+  1140→                    onChange={(e) => setInput(e.target.value)}
+  1141→                    placeholder="اكتب رسالتك هنا..."
+  1142→                    disabled={isLoading}
+  1143→                    className="w-full bg-gray-50 border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 transition-all disabled:opacity-50 placeholder:text-gray-400"
+  1144→                    dir="rtl"
+  1145→                  />
+  1146→                </div>
+  1147→                <Button
+  1148→                  type="submit"
+  1149→                  disabled={!input.trim() || isLoading}
+  1150→                  className="w-10 h-10 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white flex-shrink-0 shadow-lg shadow-emerald-200 disabled:opacity-40 disabled:shadow-none transition-all active:scale-90"
+  1151→                  size="icon"
+  1152→                >
+  1153→                  <Send className="w-4 h-4 rotate-180" />
+  1154→                </Button>
+  1155→              </form>
+  1156→              <p className="text-center text-[10px] text-gray-300 mt-1.5">
+  1157→                مدعوم بالذكاء الاصطناعي
+  1158→              </p>
+  1159→            </div>
+  1160→          </>
+  1161→        )}
+  1162→
+  1163→        {/* Bottom Home Indicator */}
+  1164→        <div className="hidden sm:flex justify-center pb-2 bg-white">
+  1165→          <div className="w-32 h-1 bg-gray-200 rounded-full" />
+  1166→        </div>
+  1167→      </motion.div>
+  1168→
+  1169→      {/* Settings Modal */}
+  1170→      <AnimatePresence>
+  1171→        {showSettings && (
+  1172→          <motion.div
+  1173→            initial={{ opacity: 0 }}
+  1174→            animate={{ opacity: 1 }}
+  1175→            exit={{ opacity: 0 }}
+  1176→            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+  1177→            onClick={() => setShowSettings(false)}
+  1178→          >
+  1179→            <motion.div
+  1180→              initial={{ scale: 0.9, opacity: 0 }}
+  1181→              animate={{ scale: 1, opacity: 1 }}
+  1182→              exit={{ scale: 0.9, opacity: 0 }}
+  1183→              onClick={(e) => e.stopPropagation()}
+  1184→              className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+  1185→              dir="rtl"
+  1186→            >
+  1187→              {/* Settings Header */}
+  1188→              <div className="bg-gradient-to-l from-emerald-700 to-emerald-600 text-white px-5 py-4 flex items-center justify-between">
+  1189→                <div className="flex items-center gap-2">
+  1190→                  <Settings className="w-5 h-5" />
+  1191→                  <h2 className="font-bold text-lg">إعدادات الصوت</h2>
+  1192→                </div>
+  1193→                <button
+  1194→                  onClick={() => setShowSettings(false)}
+  1195→                  className="text-white/80 hover:text-white"
+  1196→                >
+  1197→                  <X className="w-5 h-5" />
+  1198→                </button>
+  1199→              </div>
+  1200→
+  1201→              <div className="p-5 space-y-5">
+  1202→                {/* TTS Provider Selection */}
+  1203→                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+  1204→                  <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2">
+  1205→                    <Key className="w-4 h-4" />
+  1206→                    مفتاح API للتحويل الصوتي
+  1207→                  </h3>
+  1208→                  <p className="text-emerald-700 text-xs leading-relaxed mb-3">
+  1209→                    عشان المساعد يتكلم عربي بصوت واضح وطبيعي، تحتاج مفتاح API. يدعم OpenAI و Google Cloud.
+  1210→                  </p>
+  1211→                  <div className="flex gap-2 mb-3">
+  1212→                    <button
+  1213→                      onClick={() => {
+  1214→                        setTtsProvider('openai')
+  1215→                        setTtsVoice('alloy')
+  1216→                      }}
+  1217→                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all ${
+  1218→                        ttsProvider === 'openai'
+  1219→                          ? 'bg-emerald-600 text-white shadow'
+  1220→                          : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+  1221→                      }`}
+  1222→                    >
+  1223→                      OpenAI (sk-...)
+  1224→                    </button>
+  1225→                    <button
+  1226→                      onClick={() => {
+  1227→                        setTtsProvider('google')
+  1228→                        setTtsVoice('ar-XA-Standard-A')
+  1229→                      }}
+  1230→                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all ${
+  1231→                        ttsProvider === 'google'
+  1232→                          ? 'bg-emerald-600 text-white shadow'
+  1233→                          : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+  1234→                      }`}
+  1235→                    >
+  1236→                      Google (AIza...)
+  1237→                    </button>
+  1238→                    <button
+  1239→                      onClick={() => setTtsProvider('auto')}
+  1240→                      className={`flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all ${
+  1241→                        ttsProvider === 'auto'
+  1242→                          ? 'bg-emerald-600 text-white shadow'
+  1243→                          : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+  1244→                      }`}
+  1245→                    >
+  1246→                      تلقائي
+  1247→                    </button>
+  1248→                  </div>
+  1249→                  {ttsProvider === 'auto' && (
+  1250→                    <p className="text-emerald-600 text-[10px]">يكتف تلقائياً بناءً على شكل المفتاح</p>
+  1251→                  )}
+  1252→                </div>
+  1253→
+  1254→                {/* Voice Selection */}
+  1255→                <div>
+  1256→                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+  1257→                    الصوت
+  1258→                  </label>
+  1259→                  <select
+  1260→                    value={ttsVoice}
+  1261→                    onChange={(e) => setTtsVoice(e.target.value)}
+  1262→                    className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400"
+  1263→                    dir="rtl"
+  1264→                  >
+  1265→                    {(ttsProvider === 'openai' || ttsProvider === 'auto') && (
+  1266→                      <>
+  1267→                        <option disabled value="">─ أصوات OpenAI ─</option>
+  1268→                        <option value="alloy">Alloy (متوازن)</option>
+  1269→                        <option value="echo">Echo (ذكر)</option>
+  1270→                        <option value="fable">Fable (معبر)</option>
+  1271→                        <option value="onyx">Onyx (ذكر عميق)</option>
+  1272→                        <option value="nova">Nova (أنثى)</option>
+  1273→                        <option value="shimmer">Shimmer (أنثى ناعم)</option>
+  1274→                      </>
+  1275→                    )}
+  1276→                    {(ttsProvider === 'google' || ttsProvider === 'auto') && (
+  1277→                      <>
+  1278→                        <option disabled value="">─ أصوات Google ─</option>
+  1279→                        <option value="ar-XA-Standard-A">عربي - أنثى (قياسي)</option>
+  1280→                        <option value="ar-XA-Standard-B">عربي - ذكر (قياسي)</option>
+  1281→                        <option value="ar-XA-Wavenet-A">عربي - أنثى (عالي الجودة)</option>
+  1282→                        <option value="ar-XA-Wavenet-B">عربي - ذكر (عالي الجودة)</option>
+  1283→                      </>
+  1284→                    )}
+  1285→                  </select>
+  1286→                </div>
+  1287→
+  1288→                {/* API Key Input */}
+  1289→                <div>
+  1290→                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+  1291→                    مفتاح API
+  1292→                  </label>
+  1293→                  <div className="flex gap-2">
+  1294→                    <input
+  1295→                      type="password"
+  1296→                      value={ttsApiKey}
+  1297→                      onChange={(e) => {
+  1298→                        setTtsApiKey(e.target.value)
+  1299→                        setTtsApiSaved(false)
+  1300→                      }}
+  1301→                      placeholder={ttsProvider === 'google' ? 'AIzaSy...' : 'sk-proj-...'}
+  1302→                      className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 font-mono"
+  1303→                      dir="ltr"
+  1304→                    />
+  1305→                    <Button
+  1306→                      onClick={saveTtsApiKey}
+  1307→                      disabled={!ttsApiKey.trim() || ttsApiStatus === 'testing'}
+  1308→                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 rounded-lg text-sm"
+  1309→                    >
+  1310→                      {ttsApiStatus === 'testing' ? '...' : 'حفظ'}
+  1311→                    </Button>
+  1312→                  </div>
+  1313→                </div>
+  1314→
+  1315→                {/* Status */}
+  1316→                {ttsApiStatus === 'success' && (
+  1317→                  <motion.div
+  1318→                    initial={{ opacity: 0, y: -5 }}
+  1319→                    animate={{ opacity: 1, y: 0 }}
+  1320→                    className="flex items-center gap-2 text-green-600 text-sm bg-green-50 border border-green-200 rounded-lg px-3 py-2"
+  1321→                  >
+  1322→                    <CheckCircle className="w-4 h-4" />
+  1323→                    تم حفظ المفتاح بنجاح! المساعد الحين يتكلم عربي
+  1324→                  </motion.div>
+  1325→                )}
+  1326→
+  1327→                {ttsApiStatus === 'error' && (
+  1328→                  <motion.div
+  1329→                    initial={{ opacity: 0, y: -5 }}
+  1330→                    animate={{ opacity: 1, y: 0 }}
+  1331→                    className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg px-3 py-2"
+  1332→                  >
+  1333→                    <AlertCircle className="w-4 h-4" />
+  1334→                    المفتاح ما اشتغل، تأكد إنه صح
+  1335→                  </motion.div>
+  1336→                )}
+  1337→
+  1338→                {ttsApiSaved && (
+  1339→                  <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+  1340→                    <span className="text-sm text-gray-600 flex items-center gap-2">
+  1341→                      <CheckCircle className="w-4 h-4 text-green-500" />
+  1342→                      مفتاح محفوظ ({ttsProvider === 'openai' ? 'OpenAI' : ttsProvider === 'google' ? 'Google' : 'تلقائي'})
+  1343→                    </span>
+  1344→                    <button
+  1345→                      onClick={removeTtsApiKey}
+  1346→                      className="text-xs text-red-500 hover:text-red-700"
+  1347→                    >
+  1348→                      حذف
+  1349→                    </button>
+  1350→                  </div>
+  1351→                )}
+  1352→
+  1353→                {/* Steps Guide */}
+  1354→                <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+  1355→                  <h4 className="font-bold text-gray-700 text-sm mb-2">كيف تحصل على المفتاح؟</h4>
+  1356→                  <div className="space-y-3">
+  1357→                    <div>
+  1358→                      <p className="text-xs font-medium text-gray-700 mb-1">OpenAI (سهل وسريع):</p>
+  1359→                      <ol className="text-gray-600 text-xs space-y-1 list-decimal pr-4">
+  1360→                        <li>ادخل على <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">platform.openai.com</a></li>
+  1361→                        <li>اضغط Create API Key</li>
+  1362→                        <li>انسخ المفتاح وحطه فوق</li>
+  1363→                      </ol>
+  1364→                    </div>
+  1365→                    <div>
+  1366→                      <p className="text-xs font-medium text-gray-700 mb-1">Google Cloud (أصوات عربية أصيلة):</p>
+  1367→                      <ol className="text-gray-600 text-xs space-y-1 list-decimal pr-4">
+  1368→                        <li>ادخل على <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">Google Cloud Console</a></li>
+  1369→                        <li>فعّل <a href="https://console.cloud.google.com/apis/library/texttospeech.googleapis.com" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">Text-to-Speech API</a></li>
+  1370→                        <li>روح لـ Credentials → Create API Key</li>
+  1371→                      </ol>
+  1372→                    </div>
+  1373→                  </div>
+  1374→                </div>
+  1375→
+  1376→                {/* Current Mode */}
+  1377→                <div className="border-t border-gray-200 pt-4">
+  1378→                  <h4 className="font-bold text-gray-700 text-sm mb-2">وضع الصوت الحالي:</h4>
+  1379→                  <div className="flex items-center gap-2">
+  1380→                    {ttsApiSaved ? (
+  1381→                      <>
+  1382→                        <span className="w-3 h-3 bg-green-400 rounded-full" />
+  1383→                        <span className="text-sm text-green-700">
+  1384→                          {ttsProvider === 'google' ? 'Google Cloud TTS' : 'OpenAI TTS'} (عربي بجودة عالية)
+  1385→                        </span>
+  1386→                      </>
+  1387→                    ) : (
+  1388→                      <>
+  1389→                        <span className="w-3 h-3 bg-amber-400 rounded-full" />
+  1390→                        <span className="text-sm text-amber-700">متصفح الصوت (جودة تعتمد على المتصفح)</span>
+  1391→                      </>
+  1392→                    )}
+  1393→                  </div>
+  1394→                </div>
+  1395→              </div>
+  1396→            </motion.div>
+  1397→          </motion.div>
+  1398→        )}
+  1399→      </AnimatePresence>
+  1400→    </div>
+  1401→  )
+  1402→}
+  1403→
