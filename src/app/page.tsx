@@ -19,6 +19,11 @@ import {
   MicOff,
   Volume2,
   VolumeX,
+  Settings,
+  X,
+  Key,
+  CheckCircle,
+  AlertCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -59,6 +64,12 @@ export default function Home() {
   const [isSpeakerOn, setIsSpeakerOn] = useState(true)
   const [micPermission, setMicPermission] = useState<'prompt' | 'granted' | 'denied'>('prompt')
 
+  // Settings state
+  const [showSettings, setShowSettings] = useState(false)
+  const [ttsApiKey, setTtsApiKey] = useState('')
+  const [ttsApiSaved, setTtsApiSaved] = useState(false)
+  const [ttsApiStatus, setTtsApiStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -76,6 +87,15 @@ export default function Home() {
   useEffect(() => {
     scrollToBottom()
   }, [messages, isLoading, scrollToBottom])
+
+  // Load TTS API key from localStorage
+  useEffect(() => {
+    const savedKey = localStorage.getItem('tts_api_key')
+    if (savedKey) {
+      setTtsApiKey(savedKey)
+      setTtsApiSaved(true)
+    }
+  }, [])
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -368,48 +388,119 @@ export default function Home() {
   const playTTS = async (text: string): Promise<void> => {
     return new Promise(async (resolve) => {
       try {
-        // Use browser's built-in SpeechSynthesis API for Arabic support
-        if ('speechSynthesis' in window) {
-          // Cancel any ongoing speech
-          window.speechSynthesis.cancel()
+        // Priority 1: Use Google Cloud TTS API if key is saved
+        const savedKey = localStorage.getItem('tts_api_key')
+        if (savedKey) {
+          try {
+            const res = await fetch('/api/tts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text, speed: 1.0, api_key: savedKey }),
+            })
 
-          const utterance = new SpeechSynthesisUtterance(text)
-          utterance.lang = 'ar-SA'
-          utterance.rate = 0.95
-          utterance.pitch = 1.0
-          utterance.volume = 1.0
+            if (res.ok) {
+              const audioBlob = await res.blob()
+              const audioUrl = URL.createObjectURL(audioBlob)
+              const audio = new Audio(audioUrl)
+              audioRef.current = audio
 
-          // Try to find an Arabic voice
-          const voices = window.speechSynthesis.getVoices()
-          const arabicVoice = voices.find(v => v.lang.startsWith('ar'))
-          if (arabicVoice) {
-            utterance.voice = arabicVoice
-          }
+              audio.onended = () => {
+                URL.revokeObjectURL(audioUrl)
+                audioRef.current = null
+                resolve()
+              }
+              audio.onerror = () => {
+                URL.revokeObjectURL(audioUrl)
+                audioRef.current = null
+                // Fall back to browser TTS
+                browserTTS(text, resolve)
+              }
 
-          utterance.onend = () => resolve()
-          utterance.onerror = () => resolve()
-
-          // Some browsers need voices to be loaded first
-          if (voices.length === 0) {
-            window.speechSynthesis.onvoiceschanged = () => {
-              const newVoices = window.speechSynthesis.getVoices()
-              const arVoice = newVoices.find(v => v.lang.startsWith('ar'))
-              if (arVoice) utterance.voice = arVoice
-              window.speechSynthesis.speak(utterance)
+              await audio.play()
+              return // Success, don't fall through
             }
-          } else {
-            window.speechSynthesis.speak(utterance)
+          } catch (error) {
+            console.error('API TTS failed, falling back to browser:', error)
           }
-        } else {
-          // Fallback: no speech synthesis available
-          console.warn('SpeechSynthesis not supported')
-          resolve()
         }
+
+        // Priority 2: Use browser's built-in SpeechSynthesis as fallback
+        browserTTS(text, resolve)
       } catch (error) {
         console.error('TTS playback error:', error)
         resolve()
       }
     })
+  }
+
+  const browserTTS = (text: string, resolve: (value: void) => void) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+
+      const utterance = new SpeechSynthesisUtterance(text)
+      utterance.lang = 'ar-SA'
+      utterance.rate = 0.95
+      utterance.pitch = 1.0
+      utterance.volume = 1.0
+
+      const voices = window.speechSynthesis.getVoices()
+      const arabicVoice = voices.find(v => v.lang.startsWith('ar'))
+      if (arabicVoice) {
+        utterance.voice = arabicVoice
+      }
+
+      utterance.onend = () => resolve()
+      utterance.onerror = () => resolve()
+
+      if (voices.length === 0) {
+        window.speechSynthesis.onvoiceschanged = () => {
+          const newVoices = window.speechSynthesis.getVoices()
+          const arVoice = newVoices.find(v => v.lang.startsWith('ar'))
+          if (arVoice) utterance.voice = arVoice
+          window.speechSynthesis.speak(utterance)
+        }
+      } else {
+        window.speechSynthesis.speak(utterance)
+      }
+    } else {
+      console.warn('SpeechSynthesis not supported')
+      resolve()
+    }
+  }
+
+  const saveTtsApiKey = async () => {
+    if (!ttsApiKey.trim()) return
+
+    setTtsApiStatus('testing')
+    try {
+      // Test the API key with a simple request
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'تجربة', speed: 1.0, api_key: ttsApiKey.trim() }),
+      })
+
+      if (res.ok) {
+        localStorage.setItem('tts_api_key', ttsApiKey.trim())
+        setTtsApiSaved(true)
+        setTtsApiStatus('success')
+      } else {
+        const data = await res.json().catch(() => ({}))
+        console.error('TTS test failed:', data)
+        setTtsApiStatus('error')
+      }
+    } catch {
+      setTtsApiStatus('error')
+    }
+
+    setTimeout(() => setTtsApiStatus('idle'), 3000)
+  }
+
+  const removeTtsApiKey = () => {
+    localStorage.removeItem('tts_api_key')
+    setTtsApiKey('')
+    setTtsApiSaved(false)
+    setTtsApiStatus('idle')
   }
 
   const formatTime = (date: Date) => {
@@ -508,9 +599,14 @@ export default function Home() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="text-white/80 hover:text-white hover:bg-white/10 h-9 w-9"
+                  className={`text-white/80 hover:text-white hover:bg-white/10 h-9 w-9 relative ${ttsApiSaved ? '' : ''}`}
+                  onClick={() => setShowSettings(true)}
+                  title="إعدادات الصوت"
                 >
-                  <MoreVertical className="w-4 h-4" />
+                  <Settings className="w-4 h-4" />
+                  {ttsApiSaved && (
+                    <span className="absolute -top-0.5 -left-0.5 w-2 h-2 bg-green-400 rounded-full" />
+                  )}
                 </Button>
               </div>
             )}
@@ -1056,6 +1152,169 @@ export default function Home() {
           <div className="w-32 h-1 bg-gray-200 rounded-full" />
         </div>
       </motion.div>
+
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {showSettings && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+            onClick={() => setShowSettings(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+              dir="rtl"
+            >
+              {/* Settings Header */}
+              <div className="bg-gradient-to-l from-emerald-700 to-emerald-600 text-white px-5 py-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Settings className="w-5 h-5" />
+                  <h2 className="font-bold text-lg">إعدادات الصوت</h2>
+                </div>
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="text-white/80 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-5">
+                {/* TTS Provider Info */}
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                  <h3 className="font-bold text-emerald-800 mb-2 flex items-center gap-2">
+                    <Key className="w-4 h-4" />
+                    مفتاح Google Cloud TTS
+                  </h3>
+                  <p className="text-emerald-700 text-xs leading-relaxed mb-3">
+                    عشان المساعد يتكلم عربي بصوت واضح وطبيعي، تحتاج مفتاح API من Google Cloud.
+                    الأصوات العربية متوفرة بأسماء: <span className="font-mono bg-emerald-100 px-1 rounded">ar-XA-Standard-A</span> (أنثى) و <span className="font-mono bg-emerald-100 px-1 rounded">ar-XA-Standard-B</span> (ذكر)
+                  </p>
+                  <a
+                    href="https://console.cloud.google.com/apis/library/texttospeech.googleapis.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-emerald-600 underline hover:text-emerald-800"
+                  >
+                    تفعيل API من Google Cloud Console ←
+                  </a>
+                </div>
+
+                {/* API Key Input */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    مفتاح API
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={ttsApiKey}
+                      onChange={(e) => {
+                        setTtsApiKey(e.target.value)
+                        setTtsApiSaved(false)
+                      }}
+                      placeholder="AIzaSy..."
+                      className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 font-mono"
+                      dir="ltr"
+                    />
+                    <Button
+                      onClick={saveTtsApiKey}
+                      disabled={!ttsApiKey.trim() || ttsApiStatus === 'testing'}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 rounded-lg text-sm"
+                    >
+                      {ttsApiStatus === 'testing' ? '...' : 'حفظ'}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Status */}
+                {ttsApiStatus === 'success' && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex items-center gap-2 text-green-600 text-sm bg-green-50 border border-green-200 rounded-lg px-3 py-2"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    تم حفظ المفتاح بنجاح! المساعد الحين يتكلم عربي
+                  </motion.div>
+                )}
+
+                {ttsApiStatus === 'error' && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg px-3 py-2"
+                  >
+                    <AlertCircle className="w-4 h-4" />
+                    المفتاح ما اشتغل، تأكد إنه صح
+                  </motion.div>
+                )}
+
+                {ttsApiSaved && (
+                  <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                    <span className="text-sm text-gray-600 flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4 text-green-500" />
+                      مفتاح محفوظ
+                    </span>
+                    <button
+                      onClick={removeTtsApiKey}
+                      className="text-xs text-red-500 hover:text-red-700"
+                    >
+                      حذف
+                    </button>
+                  </div>
+                )}
+
+                {/* Steps Guide */}
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+                  <h4 className="font-bold text-gray-700 text-sm mb-2">كيف تحصل على المفتاح؟</h4>
+                  <ol className="text-gray-600 text-xs space-y-2 list-decimal pr-4">
+                    <li>
+                      ادخل على{' '}
+                      <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">
+                        Google Cloud Console
+                      </a>
+                    </li>
+                    <li>أنشئ مشروع جديد أو اختر مشروع موجود</li>
+                    <li>
+                      فعّل{' '}
+                      <a href="https://console.cloud.google.com/apis/library/texttospeech.googleapis.com" target="_blank" rel="noopener noreferrer" className="text-emerald-600 underline">
+                        Cloud Text-to-Speech API
+                      </a>
+                    </li>
+                    <li>روح لـ Credentials → Create Credentials → API Key</li>
+                    <li>انسخ المفتاح وحطه فوق</li>
+                  </ol>
+                </div>
+
+                {/* Current Mode */}
+                <div className="border-t border-gray-200 pt-4">
+                  <h4 className="font-bold text-gray-700 text-sm mb-2">وضع الصوت الحالي:</h4>
+                  <div className="flex items-center gap-2">
+                    {ttsApiSaved ? (
+                      <>
+                        <span className="w-3 h-3 bg-green-400 rounded-full" />
+                        <span className="text-sm text-green-700">Google Cloud TTS (عربي بجودة عالية)</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="w-3 h-3 bg-amber-400 rounded-full" />
+                        <span className="text-sm text-amber-700">متصفح الصوت (جودة تعتمد على المتصفح)</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
